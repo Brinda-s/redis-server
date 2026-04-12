@@ -1,8 +1,12 @@
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Main {
+  // Shared store across all clients
+  static ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
+
   public static void main(String[] args) {
     System.out.println("Logs from your program will appear here!");
 
@@ -33,17 +37,35 @@ public class Main {
           String[] parts = new String[numArgs];
 
           for (int i = 0; i < numArgs; i++) {
-            in.readLine();              // read $<length> line, ignore it
-            parts[i] = in.readLine();  // read the actual value
+            in.readLine();             // skip $<length>
+            parts[i] = in.readLine(); // read value
           }
 
           String command = parts[0].toUpperCase();
 
-          if (command.equals("PING")) {
-            out.write("+PONG\r\n".getBytes());
-          } else if (command.equals("ECHO")) {
-            String msg = parts[1];
-            out.write(("$" + msg.length() + "\r\n" + msg + "\r\n").getBytes());
+          switch (command) {
+            case "PING":
+              out.write("+PONG\r\n".getBytes());
+              break;
+
+            case "ECHO":
+              String msg = parts[1];
+              out.write(("$" + msg.length() + "\r\n" + msg + "\r\n").getBytes());
+              break;
+
+            case "SET":
+              store.put(parts[1], parts[2]);
+              out.write("+OK\r\n".getBytes());
+              break;
+
+            case "GET":
+              String val = store.get(parts[1]);
+              if (val == null) {
+                out.write("$-1\r\n".getBytes());
+              } else {
+                out.write(("$" + val.length() + "\r\n" + val + "\r\n").getBytes());
+              }
+              break;
           }
           out.flush();
         }
