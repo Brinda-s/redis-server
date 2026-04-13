@@ -93,18 +93,17 @@ public class Main {
             case "XADD": {
               String sKey = parts[1];
               String id   = parts[2];
+
+              // Full auto-generate: replace * with currentTimeMs-* BEFORE any parsing
+              if (id.equals("*")) {
+                id = System.currentTimeMillis() + "-*";
+              }
+
               String[] idParts = id.split("-");
               long newMs  = Long.parseLong(idParts[0]);
               long newSeq;
 
               List<StreamEntry> stream = streamStore.computeIfAbsent(sKey, k -> new ArrayList<>());
-
-              // Full auto-generate: replace * with currentTimeMs-*
-              if (id.equals("*")) {
-                id = System.currentTimeMillis() + "-*";
-                idParts = id.split("-");
-                newMs = Long.parseLong(idParts[0]);
-              }
 
               if (idParts[1].equals("*")) {
                 // Auto-generate sequence number
