@@ -83,6 +83,32 @@ public class Main {
               }
               break;
 
+            case "LRANGE":
+              String lKey = parts[1];
+              int start = Integer.parseInt(parts[2]);
+              int stop  = Integer.parseInt(parts[3]);
+              List<String> lList = listStore.get(lKey);
+              if (lList == null) {
+                out.write("*0\r\n".getBytes()); // empty array
+              } else {
+                synchronized (lList) {
+                  int size = lList.size();
+                  if (start >= size || start > stop) {
+                    out.write("*0\r\n".getBytes());
+                  } else {
+                    stop = Math.min(stop, size - 1); // clamp stop to last index
+                    List<String> slice = lList.subList(start, stop + 1);
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("*").append(slice.size()).append("\r\n");
+                    for (String el : slice) {
+                      sb.append("$").append(el.length()).append("\r\n").append(el).append("\r\n");
+                    }
+                    out.write(sb.toString().getBytes());
+                  }
+                }
+              }
+              break;
+
             case "RPUSH":
               // parts[1] = key, parts[2..] = values to append
               String listKey = parts[1];
