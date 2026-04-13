@@ -150,6 +150,41 @@ public class Main {
               break;
             }
 
+            case "XREAD": {
+              // XREAD STREAMS key1 id1 [key2 id2 ...]
+              // parts[1] = "STREAMS", parts[2..n] = keys, parts[n+1..] = ids
+              int numStreams = (parts.length - 2) / 2;
+              StringBuilder sb = new StringBuilder("*" + numStreams + "\r\n");
+
+              for (int i = 0; i < numStreams; i++) {
+                String xKey = parts[2 + i];
+                String xId  = parts[2 + numStreams + i];
+                String[] idP = xId.split("-");
+                long afterMs  = Long.parseLong(idP[0]);
+                long afterSeq = idP.length > 1 ? Long.parseLong(idP[1]) : 0;
+
+                List<StreamEntry> stream = streamStore.get(xKey);
+                List<StreamEntry> results = new ArrayList<>();
+                if (stream != null) {
+                  for (StreamEntry e : stream) {
+                    String[] ep = e.id.split("-");
+                    long eMs = Long.parseLong(ep[0]), eSeq = Long.parseLong(ep[1]);
+                    // exclusive: strictly greater than the given id
+                    if (eMs > afterMs || (eMs == afterMs && eSeq > afterSeq)) {
+                      results.add(e);
+                    }
+                  }
+                }
+
+                // wrap: [key, [entries]]
+                sb.append("*2\r\n");
+                sb.append("$").append(xKey.length()).append("\r\n").append(xKey).append("\r\n");
+                sb.append(encodeEntries(results));
+              }
+              out.write(sb.toString().getBytes());
+              break;
+            }
+
             case "XRANGE": {
               String sKey  = parts[1];
               String start = parts[2]; // e.g. "0-1" or "0"
