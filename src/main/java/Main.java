@@ -112,6 +112,18 @@ public class Main {
               }
               break;
 
+            case "LPOP":
+              List<String> popList = listStore.get(parts[1]);
+              if (popList == null || popList.isEmpty()) {
+                out.write("$-1\r\n".getBytes());
+              } else {
+                synchronized (popList) {
+                  String popped = popList.remove(0);
+                  out.write(("$" + popped.length() + "\r\n" + popped + "\r\n").getBytes());
+                }
+              }
+              break;
+
             case "LLEN":
               List<String> lenList = listStore.get(parts[1]);
               int len = (lenList == null) ? 0 : lenList.size();
