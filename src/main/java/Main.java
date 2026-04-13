@@ -155,9 +155,11 @@ public class Main {
               String start = parts[2]; // e.g. "0-1" or "0"
               String end   = parts[3]; // e.g. "0-3" or "0"
 
-              // Normalise: add default seq if missing
-              long startMs  = Long.parseLong(start.contains("-") ? start.split("-")[0] : start);
-              long startSeq = start.contains("-") ? Long.parseLong(start.split("-")[1]) : 0;
+              // Normalise: handle - and +, add default seq if missing
+              long startMs, startSeq;
+              if (start.equals("-")) { startMs = 0; startSeq = 0; }
+              else { startMs = Long.parseLong(start.contains("-") ? start.split("-")[0] : start);
+                     startSeq = start.contains("-") ? Long.parseLong(start.split("-")[1]) : 0; }
               long endMs    = Long.parseLong(end.contains("-") ? end.split("-")[0] : end);
               long endSeq   = end.contains("-") ? Long.parseLong(end.split("-")[1]) : Long.MAX_VALUE;
 
