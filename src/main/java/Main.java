@@ -1,11 +1,14 @@
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Main {
   static ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
-  static ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>(); // key → expiry time in ms
+  static ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>();
+  static ConcurrentHashMap<String, List<String>> listStore = new ConcurrentHashMap<>(); // key → list of values
 
   public static void main(String[] args) {
     System.out.println("Logs from your program will appear here!");
@@ -55,19 +58,17 @@ public class Main {
 
             case "SET":
               store.put(parts[1], parts[2]);
-              // Check for PX option: SET key value PX 100
               if (parts.length >= 5 && parts[3].toUpperCase().equals("PX")) {
                 long ttl = Long.parseLong(parts[4]);
                 expiry.put(parts[1], System.currentTimeMillis() + ttl);
               } else {
-                expiry.remove(parts[1]); // clear any previous expiry
+                expiry.remove(parts[1]);
               }
               out.write("+OK\r\n".getBytes());
               break;
 
             case "GET":
               String key = parts[1];
-              // Check if key is expired
               if (expiry.containsKey(key) && System.currentTimeMillis() > expiry.get(key)) {
                 store.remove(key);
                 expiry.remove(key);
@@ -79,6 +80,19 @@ public class Main {
                 } else {
                   out.write(("$" + val.length() + "\r\n" + val + "\r\n").getBytes());
                 }
+              }
+              break;
+
+            case "RPUSH":
+              // parts[1] = key, parts[2..] = values to append
+              String listKey = parts[1];
+              listStore.putIfAbsent(listKey, new ArrayList<>());
+              List<String> list = listStore.get(listKey);
+              synchronized (list) {
+                for (int i = 2; i < parts.length; i++) {
+                  list.add(parts[i]);
+                }
+                out.write((":" + list.size() + "\r\n").getBytes()); // RESP integer
               }
               break;
           }
