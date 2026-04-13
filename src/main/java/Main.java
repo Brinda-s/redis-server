@@ -87,12 +87,15 @@ public class Main {
               break;
 
             case "BLPOP": {
-              // parts[1] = key, parts[2] = timeout (0 = indefinite)
+              // parts[1] = key, parts[2] = timeout in seconds (0 = indefinite)
               String bKey = parts[1];
+              double timeoutSecs = Double.parseDouble(parts[2]);
+              long timeoutMs = (long)(timeoutSecs * 1000); // convert to ms (0 = wait forever)
+              long deadline = timeoutMs > 0 ? System.currentTimeMillis() + timeoutMs : Long.MAX_VALUE;
+
               listStore.putIfAbsent(bKey, new ArrayList<>());
               List<String> bList = listStore.get(bKey);
 
-              // Register this thread as a waiter (FIFO order)
               Object lock = new Object();
               waiters.computeIfAbsent(bKey, k -> new LinkedList<>()).add(lock);
 
@@ -101,21 +104,32 @@ public class Main {
                 while (true) {
                   synchronized (bList) {
                     if (!bList.isEmpty()) {
-                      // Check we're the first waiter before popping
                       LinkedList<Object> q = waiters.get(bKey);
                       if (q != null && q.peek() == lock) {
-                        q.poll(); // remove ourselves from queue
+                        q.poll();
                         popped = bList.remove(0);
                       }
                     }
                   }
                   if (popped != null) break;
-                  lock.wait(); // block until RPUSH notifies us
+
+                  long remaining = deadline - System.currentTimeMillis();
+                  if (remaining <= 0) {
+                    // timed out — remove ourselves from waiters
+                    LinkedList<Object> q = waiters.get(bKey);
+                    if (q != null) q.remove(lock);
+                    break;
+                  }
+                  lock.wait(remaining); // wait up to remaining ms
                 }
               }
 
-              out.write(("*2\r\n$" + bKey.length() + "\r\n" + bKey + "\r\n"
-                       + "$" + popped.length() + "\r\n" + popped + "\r\n").getBytes());
+              if (popped == null) {
+                out.write("*-1\r\n".getBytes()); // null array = timed out
+              } else {
+                out.write(("*2\r\n$" + bKey.length() + "\r\n" + bKey + "\r\n"
+                         + "$" + popped.length() + "\r\n" + popped + "\r\n").getBytes());
+              }
               break;
             }
 
