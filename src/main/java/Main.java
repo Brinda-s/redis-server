@@ -1,3 +1,4 @@
+
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -95,7 +96,29 @@ public class Main {
               String id   = parts[2];
               String[] idParts = id.split("-");
               long newMs  = Long.parseLong(idParts[0]);
-              long newSeq = Long.parseLong(idParts[1]);
+              long newSeq;
+
+              List<StreamEntry> stream = streamStore.computeIfAbsent(sKey, k -> new ArrayList<>());
+
+              if (idParts[1].equals("*")) {
+                // Auto-generate sequence number
+                if (!stream.isEmpty()) {
+                  StreamEntry last = stream.get(stream.size() - 1);
+                  String[] lastParts = last.id.split("-");
+                  long lastMs  = Long.parseLong(lastParts[0]);
+                  long lastSeq = Long.parseLong(lastParts[1]);
+                  if (newMs == lastMs) {
+                    newSeq = lastSeq + 1; // same ms → increment seq
+                  } else {
+                    newSeq = (newMs == 0) ? 1 : 0; // new ms → start at 0 (or 1 if ms=0)
+                  }
+                } else {
+                  newSeq = (newMs == 0) ? 1 : 0; // empty stream
+                }
+                id = newMs + "-" + newSeq;
+              } else {
+                newSeq = Long.parseLong(idParts[1]);
+              }
 
               // 0-0 is always invalid
               if (newMs == 0 && newSeq == 0) {
@@ -103,14 +126,12 @@ public class Main {
                 break;
               }
 
-              // Validate against last entry in stream
-              List<StreamEntry> stream = streamStore.computeIfAbsent(sKey, k -> new ArrayList<>());
+              // Validate against last entry
               if (!stream.isEmpty()) {
                 StreamEntry last = stream.get(stream.size() - 1);
                 String[] lastParts = last.id.split("-");
                 long lastMs  = Long.parseLong(lastParts[0]);
                 long lastSeq = Long.parseLong(lastParts[1]);
-
                 if (newMs < lastMs || (newMs == lastMs && newSeq <= lastSeq)) {
                   out.write("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n".getBytes());
                   break;
@@ -118,9 +139,7 @@ public class Main {
               }
 
               StreamEntry entry = new StreamEntry(id);
-              for (int i = 3; i + 1 < parts.length; i += 2) {
-                entry.fields.put(parts[i], parts[i + 1]);
-              }
+              for (int i = 3; i + 1 < parts.length; i += 2) entry.fields.put(parts[i], parts[i + 1]);
               stream.add(entry);
               out.write(("$" + id.length() + "\r\n" + id + "\r\n").getBytes());
               break;
