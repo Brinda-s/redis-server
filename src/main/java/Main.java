@@ -112,6 +112,12 @@ public class Main {
               }
               break;
 
+            case "LLEN":
+              List<String> lenList = listStore.get(parts[1]);
+              int len = (lenList == null) ? 0 : lenList.size();
+              out.write((":" + len + "\r\n").getBytes());
+              break;
+
             case "LPUSH":
               String lpKey = parts[1];
               listStore.putIfAbsent(lpKey, new ArrayList<>());
