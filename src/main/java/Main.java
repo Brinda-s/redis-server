@@ -112,6 +112,19 @@ public class Main {
               }
               break;
 
+            case "LPUSH":
+              String lpKey = parts[1];
+              listStore.putIfAbsent(lpKey, new ArrayList<>());
+              List<String> lpList = listStore.get(lpKey);
+              synchronized (lpList) {
+                // insert each element at index 0 (reverse order)
+                for (int i = 2; i < parts.length; i++) {
+                  lpList.add(0, parts[i]);
+                }
+                out.write((":" + lpList.size() + "\r\n").getBytes());
+              }
+              break;
+
             case "RPUSH":
               // parts[1] = key, parts[2..] = values to append
               String listKey = parts[1];
