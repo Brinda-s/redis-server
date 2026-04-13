@@ -1,4 +1,3 @@
-
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -99,6 +98,13 @@ public class Main {
               long newSeq;
 
               List<StreamEntry> stream = streamStore.computeIfAbsent(sKey, k -> new ArrayList<>());
+
+              // Full auto-generate: replace * with currentTimeMs-*
+              if (id.equals("*")) {
+                id = System.currentTimeMillis() + "-*";
+                idParts = id.split("-");
+                newMs = Long.parseLong(idParts[0]);
+              }
 
               if (idParts[1].equals("*")) {
                 // Auto-generate sequence number
