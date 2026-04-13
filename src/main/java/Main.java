@@ -160,8 +160,10 @@ public class Main {
               if (start.equals("-")) { startMs = 0; startSeq = 0; }
               else { startMs = Long.parseLong(start.contains("-") ? start.split("-")[0] : start);
                      startSeq = start.contains("-") ? Long.parseLong(start.split("-")[1]) : 0; }
-              long endMs    = Long.parseLong(end.contains("-") ? end.split("-")[0] : end);
-              long endSeq   = end.contains("-") ? Long.parseLong(end.split("-")[1]) : Long.MAX_VALUE;
+              long endMs, endSeq;
+              if (end.equals("+")) { endMs = Long.MAX_VALUE; endSeq = Long.MAX_VALUE; }
+              else { endMs  = Long.parseLong(end.contains("-") ? end.split("-")[0] : end);
+                     endSeq = end.contains("-") ? Long.parseLong(end.split("-")[1]) : Long.MAX_VALUE; }
 
               List<StreamEntry> stream = streamStore.get(sKey);
               List<StreamEntry> results = new ArrayList<>();
