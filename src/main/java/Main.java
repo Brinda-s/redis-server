@@ -150,6 +150,11 @@ public class Main {
             for (int i = 0; i < numStreams; i++) {
               xKeys[i] = parts[streamsIdx + 1 + i];
               xIds[i]  = parts[streamsIdx + 1 + numStreams + i];
+              // $ means "only entries added after this command" → resolve to current last ID
+              if (xIds[i].equals("$")) {
+                List<StreamEntry> s = streamStore.get(xKeys[i]);
+                xIds[i] = (s != null && !s.isEmpty()) ? s.get(s.size()-1).id : "0-0";
+              }
             }
 
             // Helper: collect results for all streams
