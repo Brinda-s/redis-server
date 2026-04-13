@@ -1,31 +1,34 @@
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.ArrayList;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Main {
   static ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, List<String>> listStore = new ConcurrentHashMap<>();
-  // key → FIFO queue of waiters (each waiter is a lock object)
   static ConcurrentHashMap<String, LinkedList<Object>> waiters = new ConcurrentHashMap<>();
+  // Stream store: key → ordered list of entries
+  static ConcurrentHashMap<String, List<StreamEntry>> streamStore = new ConcurrentHashMap<>();
+
+  // A stream entry: an ID + key-value pairs
+  static class StreamEntry {
+    String id;
+    LinkedHashMap<String, String> fields = new LinkedHashMap<>();
+    StreamEntry(String id) { this.id = id; }
+  }
 
   public static void main(String[] args) {
     System.out.println("Logs from your program will appear here!");
-
     int port = 6379;
     try {
       ServerSocket serverSocket = new ServerSocket(port);
       serverSocket.setReuseAddress(true);
-
       while (true) {
         Socket clientSocket = serverSocket.accept();
         new Thread(() -> handleClient(clientSocket)).start();
       }
-
     } catch (IOException e) {
       System.out.println("IOException: " + e.getMessage());
     }
@@ -41,102 +44,95 @@ public class Main {
         if (line.startsWith("*")) {
           int numArgs = Integer.parseInt(line.substring(1));
           String[] parts = new String[numArgs];
-
           for (int i = 0; i < numArgs; i++) {
             in.readLine();
             parts[i] = in.readLine();
           }
 
           String command = parts[0].toUpperCase();
-
           switch (command) {
+
             case "PING":
-              out.write("+PONG\r\n".getBytes());
-              break;
+              out.write("+PONG\r\n".getBytes()); break;
 
             case "ECHO":
               String msg = parts[1];
-              out.write(("$" + msg.length() + "\r\n" + msg + "\r\n").getBytes());
-              break;
+              out.write(("$" + msg.length() + "\r\n" + msg + "\r\n").getBytes()); break;
 
             case "SET":
               store.put(parts[1], parts[2]);
               if (parts.length >= 5 && parts[3].toUpperCase().equals("PX")) {
-                long ttl = Long.parseLong(parts[4]);
-                expiry.put(parts[1], System.currentTimeMillis() + ttl);
+                expiry.put(parts[1], System.currentTimeMillis() + Long.parseLong(parts[4]));
               } else {
                 expiry.remove(parts[1]);
               }
-              out.write("+OK\r\n".getBytes());
-              break;
+              out.write("+OK\r\n".getBytes()); break;
 
-            case "GET":
-              String key = parts[1];
-              if (expiry.containsKey(key) && System.currentTimeMillis() > expiry.get(key)) {
-                store.remove(key);
-                expiry.remove(key);
+            case "GET": {
+              String k = parts[1];
+              if (expiry.containsKey(k) && System.currentTimeMillis() > expiry.get(k)) {
+                store.remove(k); expiry.remove(k);
                 out.write("$-1\r\n".getBytes());
               } else {
-                String val = store.get(key);
-                if (val == null) {
-                  out.write("$-1\r\n".getBytes());
-                } else {
-                  out.write(("$" + val.length() + "\r\n" + val + "\r\n").getBytes());
-                }
+                String v = store.get(k);
+                out.write(v == null ? "$-1\r\n".getBytes()
+                  : ("$" + v.length() + "\r\n" + v + "\r\n").getBytes());
               }
               break;
+            }
 
-            case "TYPE":
-              String typeKey = parts[1];
-              if (store.containsKey(typeKey)) {
-                out.write("+string\r\n".getBytes());
-              } else if (listStore.containsKey(typeKey)) {
-                out.write("+list\r\n".getBytes());
-              } else {
-                out.write("+none\r\n".getBytes());
-              }
+            case "TYPE": {
+              String k = parts[1];
+              if (store.containsKey(k))       out.write("+string\r\n".getBytes());
+              else if (listStore.containsKey(k))  out.write("+list\r\n".getBytes());
+              else if (streamStore.containsKey(k)) out.write("+stream\r\n".getBytes());
+              else                             out.write("+none\r\n".getBytes());
               break;
+            }
+
+            case "XADD": {
+              // XADD stream_key id field1 val1 field2 val2 ...
+              String sKey = parts[1];
+              String id   = parts[2];
+              StreamEntry entry = new StreamEntry(id);
+              for (int i = 3; i + 1 < parts.length; i += 2) {
+                entry.fields.put(parts[i], parts[i + 1]);
+              }
+              streamStore.computeIfAbsent(sKey, k -> new ArrayList<>()).add(entry);
+              out.write(("$" + id.length() + "\r\n" + id + "\r\n").getBytes());
+              break;
+            }
 
             case "BLPOP": {
-              // parts[1] = key, parts[2] = timeout in seconds (0 = indefinite)
               String bKey = parts[1];
               double timeoutSecs = Double.parseDouble(parts[2]);
-              long timeoutMs = (long)(timeoutSecs * 1000); // convert to ms (0 = wait forever)
+              long timeoutMs = (long)(timeoutSecs * 1000);
               long deadline = timeoutMs > 0 ? System.currentTimeMillis() + timeoutMs : Long.MAX_VALUE;
-
               listStore.putIfAbsent(bKey, new ArrayList<>());
               List<String> bList = listStore.get(bKey);
-
               Object lock = new Object();
               waiters.computeIfAbsent(bKey, k -> new LinkedList<>()).add(lock);
-
               String popped = null;
               synchronized (lock) {
                 while (true) {
                   synchronized (bList) {
                     if (!bList.isEmpty()) {
                       LinkedList<Object> q = waiters.get(bKey);
-                      if (q != null && q.peek() == lock) {
-                        q.poll();
-                        popped = bList.remove(0);
-                      }
+                      if (q != null && q.peek() == lock) { q.poll(); popped = bList.remove(0); }
                     }
                   }
                   if (popped != null) break;
-
                   long remaining = deadline - System.currentTimeMillis();
                   if (remaining <= 0) {
-                    // timed out — remove ourselves from waiters
                     LinkedList<Object> q = waiters.get(bKey);
                     if (q != null) q.remove(lock);
                     break;
                   }
-                  lock.wait(remaining); // wait up to remaining ms
+                  lock.wait(remaining);
                 }
               }
-
               if (popped == null) {
-                out.write("*-1\r\n".getBytes()); // null array = timed out
+                out.write("*-1\r\n".getBytes());
               } else {
                 out.write(("*2\r\n$" + bKey.length() + "\r\n" + bKey + "\r\n"
                          + "$" + popped.length() + "\r\n" + popped + "\r\n").getBytes());
@@ -144,26 +140,25 @@ public class Main {
               break;
             }
 
-            case "LLEN":
-              List<String> lenList = listStore.get(parts[1]);
-              int len = (lenList == null) ? 0 : lenList.size();
-              out.write((":" + len + "\r\n").getBytes());
-              break;
+            case "LLEN": {
+              List<String> l = listStore.get(parts[1]);
+              out.write((":" + (l == null ? 0 : l.size()) + "\r\n").getBytes()); break;
+            }
 
-            case "LPOP":
-              List<String> popList = listStore.get(parts[1]);
-              if (popList == null || popList.isEmpty()) {
+            case "LPOP": {
+              List<String> pl = listStore.get(parts[1]);
+              if (pl == null || pl.isEmpty()) {
                 out.write("$-1\r\n".getBytes());
               } else {
-                synchronized (popList) {
+                synchronized (pl) {
                   if (parts.length == 2) {
-                    String popped = popList.remove(0);
-                    out.write(("$" + popped.length() + "\r\n" + popped + "\r\n").getBytes());
+                    String p = pl.remove(0);
+                    out.write(("$" + p.length() + "\r\n" + p + "\r\n").getBytes());
                   } else {
-                    int count = Math.min(Integer.parseInt(parts[2]), popList.size());
+                    int count = Math.min(Integer.parseInt(parts[2]), pl.size());
                     StringBuilder sb = new StringBuilder("*" + count + "\r\n");
                     for (int i = 0; i < count; i++) {
-                      String el = popList.remove(0);
+                      String el = pl.remove(0);
                       sb.append("$").append(el.length()).append("\r\n").append(el).append("\r\n");
                     }
                     out.write(sb.toString().getBytes());
@@ -171,87 +166,73 @@ public class Main {
                 }
               }
               break;
+            }
 
-            case "LPUSH":
-              String lpKey = parts[1];
-              listStore.putIfAbsent(lpKey, new ArrayList<>());
-              List<String> lpList = listStore.get(lpKey);
-              synchronized (lpList) {
-                for (int i = 2; i < parts.length; i++) {
-                  lpList.add(0, parts[i]);
-                }
-                out.write((":" + lpList.size() + "\r\n").getBytes());
+            case "LPUSH": {
+              String k = parts[1];
+              listStore.putIfAbsent(k, new ArrayList<>());
+              List<String> l = listStore.get(k);
+              synchronized (l) {
+                for (int i = 2; i < parts.length; i++) l.add(0, parts[i]);
+                out.write((":" + l.size() + "\r\n").getBytes());
               }
-              notifyWaiter(lpKey);
-              break;
+              notifyWaiter(k); break;
+            }
 
-            case "RPUSH":
-              String listKey = parts[1];
-              listStore.putIfAbsent(listKey, new ArrayList<>());
-              List<String> list = listStore.get(listKey);
-              synchronized (list) {
-                for (int i = 2; i < parts.length; i++) {
-                  list.add(parts[i]);
-                }
-                out.write((":" + list.size() + "\r\n").getBytes());
+            case "RPUSH": {
+              String k = parts[1];
+              listStore.putIfAbsent(k, new ArrayList<>());
+              List<String> l = listStore.get(k);
+              synchronized (l) {
+                for (int i = 2; i < parts.length; i++) l.add(parts[i]);
+                out.write((":" + l.size() + "\r\n").getBytes());
               }
-              notifyWaiter(listKey);
-              break;
+              notifyWaiter(k); break;
+            }
 
-            case "LRANGE":
-              String lKey = parts[1];
+            case "LRANGE": {
+              String k = parts[1];
               int start = Integer.parseInt(parts[2]);
               int stop  = Integer.parseInt(parts[3]);
-              List<String> lList = listStore.get(lKey);
-              if (lList == null) {
+              List<String> l = listStore.get(k);
+              if (l == null) {
                 out.write("*0\r\n".getBytes());
               } else {
-                synchronized (lList) {
-                  int size = lList.size();
+                synchronized (l) {
+                  int size = l.size();
                   if (start < 0) start = Math.max(0, size + start);
                   if (stop  < 0) stop  = size + stop;
                   if (start >= size || start > stop) {
                     out.write("*0\r\n".getBytes());
                   } else {
                     stop = Math.min(stop, size - 1);
-                    List<String> slice = lList.subList(start, stop + 1);
-                    StringBuilder sb = new StringBuilder();
-                    sb.append("*").append(slice.size()).append("\r\n");
-                    for (String el : slice) {
+                    List<String> slice = l.subList(start, stop + 1);
+                    StringBuilder sb = new StringBuilder("*" + slice.size() + "\r\n");
+                    for (String el : slice)
                       sb.append("$").append(el.length()).append("\r\n").append(el).append("\r\n");
-                    }
                     out.write(sb.toString().getBytes());
                   }
                 }
               }
               break;
+            }
           }
           out.flush();
         }
       }
-
     } catch (IOException | InterruptedException e) {
       System.out.println("Exception: " + e.getMessage());
     } finally {
-      try {
-        clientSocket.close();
-      } catch (IOException e) {
-        System.out.println("IOException: " + e.getMessage());
-      }
+      try { clientSocket.close(); } catch (IOException e) { System.out.println("IOException: " + e.getMessage()); }
     }
   }
 
-  // Wake up the first waiter in the queue for this key
   private static void notifyWaiter(String key) {
     LinkedList<Object> q = waiters.get(key);
     if (q != null) {
       synchronized (q) {
         Object first = q.peek();
-        if (first != null) {
-          synchronized (first) {
-            first.notify();
-          }
-        }
+        if (first != null) { synchronized (first) { first.notify(); } }
       }
     }
   }
