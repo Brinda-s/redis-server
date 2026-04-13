@@ -150,6 +150,33 @@ public class Main {
               break;
             }
 
+            case "XRANGE": {
+              String sKey  = parts[1];
+              String start = parts[2]; // e.g. "0-1" or "0"
+              String end   = parts[3]; // e.g. "0-3" or "0"
+
+              // Normalise: add default seq if missing
+              long startMs  = Long.parseLong(start.contains("-") ? start.split("-")[0] : start);
+              long startSeq = start.contains("-") ? Long.parseLong(start.split("-")[1]) : 0;
+              long endMs    = Long.parseLong(end.contains("-") ? end.split("-")[0] : end);
+              long endSeq   = end.contains("-") ? Long.parseLong(end.split("-")[1]) : Long.MAX_VALUE;
+
+              List<StreamEntry> stream = streamStore.get(sKey);
+              List<StreamEntry> results = new ArrayList<>();
+              if (stream != null) {
+                for (StreamEntry e : stream) {
+                  String[] ep = e.id.split("-");
+                  long eMs = Long.parseLong(ep[0]), eSeq = Long.parseLong(ep[1]);
+                  boolean afterStart = eMs > startMs || (eMs == startMs && eSeq >= startSeq);
+                  boolean beforeEnd  = eMs < endMs   || (eMs == endMs   && eSeq <= endSeq);
+                  if (afterStart && beforeEnd) results.add(e);
+                }
+              }
+
+              out.write(encodeEntries(results).getBytes());
+              break;
+            }
+
             case "BLPOP": {
               String bKey = parts[1];
               double timeoutSecs = Double.parseDouble(parts[2]);
@@ -272,6 +299,21 @@ public class Main {
     } finally {
       try { clientSocket.close(); } catch (IOException e) { System.out.println("IOException: " + e.getMessage()); }
     }
+  }
+
+  // Encode a list of stream entries as a nested RESP array
+  private static String encodeEntries(List<StreamEntry> entries) {
+    StringBuilder sb = new StringBuilder("*" + entries.size() + "\r\n");
+    for (StreamEntry e : entries) {
+      sb.append("*2\r\n");
+      sb.append("$").append(e.id.length()).append("\r\n").append(e.id).append("\r\n");
+      sb.append("*").append(e.fields.size() * 2).append("\r\n");
+      for (Map.Entry<String, String> f : e.fields.entrySet()) {
+        sb.append("$").append(f.getKey().length()).append("\r\n").append(f.getKey()).append("\r\n");
+        sb.append("$").append(f.getValue().length()).append("\r\n").append(f.getValue()).append("\r\n");
+      }
+    }
+    return sb.toString();
   }
 
   private static void notifyWaiter(String key) {
