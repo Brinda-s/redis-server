@@ -86,6 +86,17 @@ public class Main {
               }
               break;
 
+            case "TYPE":
+              String typeKey = parts[1];
+              if (store.containsKey(typeKey)) {
+                out.write("+string\r\n".getBytes());
+              } else if (listStore.containsKey(typeKey)) {
+                out.write("+list\r\n".getBytes());
+              } else {
+                out.write("+none\r\n".getBytes());
+              }
+              break;
+
             case "BLPOP": {
               // parts[1] = key, parts[2] = timeout in seconds (0 = indefinite)
               String bKey = parts[1];
