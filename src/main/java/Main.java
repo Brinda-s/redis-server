@@ -2,13 +2,16 @@ import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Main {
   static ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>();
-  static ConcurrentHashMap<String, List<String>> listStore = new ConcurrentHashMap<>(); // key → list of values
+  static ConcurrentHashMap<String, List<String>> listStore = new ConcurrentHashMap<>();
+  // key → FIFO queue of waiters (each waiter is a lock object)
+  static ConcurrentHashMap<String, LinkedList<Object>> waiters = new ConcurrentHashMap<>();
 
   public static void main(String[] args) {
     System.out.println("Logs from your program will appear here!");
@@ -83,33 +86,43 @@ public class Main {
               }
               break;
 
-            case "LRANGE":
-              String lKey = parts[1];
-              int start = Integer.parseInt(parts[2]);
-              int stop  = Integer.parseInt(parts[3]);
-              List<String> lList = listStore.get(lKey);
-              if (lList == null) {
-                out.write("*0\r\n".getBytes()); // empty array
-              } else {
-                synchronized (lList) {
-                  int size = lList.size();
-                  // convert negative indexes to positive
-                  if (start < 0) start = Math.max(0, size + start);
-                  if (stop  < 0) stop  = size + stop;
-                  if (start >= size || start > stop) {
-                    out.write("*0\r\n".getBytes());
-                  } else {
-                    stop = Math.min(stop, size - 1); // clamp stop to last index
-                    List<String> slice = lList.subList(start, stop + 1);
-                    StringBuilder sb = new StringBuilder();
-                    sb.append("*").append(slice.size()).append("\r\n");
-                    for (String el : slice) {
-                      sb.append("$").append(el.length()).append("\r\n").append(el).append("\r\n");
+            case "BLPOP": {
+              // parts[1] = key, parts[2] = timeout (0 = indefinite)
+              String bKey = parts[1];
+              listStore.putIfAbsent(bKey, new ArrayList<>());
+              List<String> bList = listStore.get(bKey);
+
+              // Register this thread as a waiter (FIFO order)
+              Object lock = new Object();
+              waiters.computeIfAbsent(bKey, k -> new LinkedList<>()).add(lock);
+
+              String popped = null;
+              synchronized (lock) {
+                while (true) {
+                  synchronized (bList) {
+                    if (!bList.isEmpty()) {
+                      // Check we're the first waiter before popping
+                      LinkedList<Object> q = waiters.get(bKey);
+                      if (q != null && q.peek() == lock) {
+                        q.poll(); // remove ourselves from queue
+                        popped = bList.remove(0);
+                      }
                     }
-                    out.write(sb.toString().getBytes());
                   }
+                  if (popped != null) break;
+                  lock.wait(); // block until RPUSH notifies us
                 }
               }
+
+              out.write(("*2\r\n$" + bKey.length() + "\r\n" + bKey + "\r\n"
+                       + "$" + popped.length() + "\r\n" + popped + "\r\n").getBytes());
+              break;
+            }
+
+            case "LLEN":
+              List<String> lenList = listStore.get(parts[1]);
+              int len = (lenList == null) ? 0 : lenList.size();
+              out.write((":" + len + "\r\n").getBytes());
               break;
 
             case "LPOP":
@@ -119,11 +132,9 @@ public class Main {
               } else {
                 synchronized (popList) {
                   if (parts.length == 2) {
-                    // no count — remove and return single element
                     String popped = popList.remove(0);
                     out.write(("$" + popped.length() + "\r\n" + popped + "\r\n").getBytes());
                   } else {
-                    // count provided — remove and return N elements as array
                     int count = Math.min(Integer.parseInt(parts[2]), popList.size());
                     StringBuilder sb = new StringBuilder("*" + count + "\r\n");
                     for (int i = 0; i < count; i++) {
@@ -136,27 +147,20 @@ public class Main {
               }
               break;
 
-            case "LLEN":
-              List<String> lenList = listStore.get(parts[1]);
-              int len = (lenList == null) ? 0 : lenList.size();
-              out.write((":" + len + "\r\n").getBytes());
-              break;
-
             case "LPUSH":
               String lpKey = parts[1];
               listStore.putIfAbsent(lpKey, new ArrayList<>());
               List<String> lpList = listStore.get(lpKey);
               synchronized (lpList) {
-                // insert each element at index 0 (reverse order)
                 for (int i = 2; i < parts.length; i++) {
                   lpList.add(0, parts[i]);
                 }
                 out.write((":" + lpList.size() + "\r\n").getBytes());
               }
+              notifyWaiter(lpKey);
               break;
 
             case "RPUSH":
-              // parts[1] = key, parts[2..] = values to append
               String listKey = parts[1];
               listStore.putIfAbsent(listKey, new ArrayList<>());
               List<String> list = listStore.get(listKey);
@@ -164,7 +168,36 @@ public class Main {
                 for (int i = 2; i < parts.length; i++) {
                   list.add(parts[i]);
                 }
-                out.write((":" + list.size() + "\r\n").getBytes()); // RESP integer
+                out.write((":" + list.size() + "\r\n").getBytes());
+              }
+              notifyWaiter(listKey);
+              break;
+
+            case "LRANGE":
+              String lKey = parts[1];
+              int start = Integer.parseInt(parts[2]);
+              int stop  = Integer.parseInt(parts[3]);
+              List<String> lList = listStore.get(lKey);
+              if (lList == null) {
+                out.write("*0\r\n".getBytes());
+              } else {
+                synchronized (lList) {
+                  int size = lList.size();
+                  if (start < 0) start = Math.max(0, size + start);
+                  if (stop  < 0) stop  = size + stop;
+                  if (start >= size || start > stop) {
+                    out.write("*0\r\n".getBytes());
+                  } else {
+                    stop = Math.min(stop, size - 1);
+                    List<String> slice = lList.subList(start, stop + 1);
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("*").append(slice.size()).append("\r\n");
+                    for (String el : slice) {
+                      sb.append("$").append(el.length()).append("\r\n").append(el).append("\r\n");
+                    }
+                    out.write(sb.toString().getBytes());
+                  }
+                }
               }
               break;
           }
@@ -172,13 +205,28 @@ public class Main {
         }
       }
 
-    } catch (IOException e) {
-      System.out.println("IOException: " + e.getMessage());
+    } catch (IOException | InterruptedException e) {
+      System.out.println("Exception: " + e.getMessage());
     } finally {
       try {
         clientSocket.close();
       } catch (IOException e) {
         System.out.println("IOException: " + e.getMessage());
+      }
+    }
+  }
+
+  // Wake up the first waiter in the queue for this key
+  private static void notifyWaiter(String key) {
+    LinkedList<Object> q = waiters.get(key);
+    if (q != null) {
+      synchronized (q) {
+        Object first = q.peek();
+        if (first != null) {
+          synchronized (first) {
+            first.notify();
+          }
+        }
       }
     }
   }
