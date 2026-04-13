@@ -118,8 +118,20 @@ public class Main {
                 out.write("$-1\r\n".getBytes());
               } else {
                 synchronized (popList) {
-                  String popped = popList.remove(0);
-                  out.write(("$" + popped.length() + "\r\n" + popped + "\r\n").getBytes());
+                  if (parts.length == 2) {
+                    // no count — remove and return single element
+                    String popped = popList.remove(0);
+                    out.write(("$" + popped.length() + "\r\n" + popped + "\r\n").getBytes());
+                  } else {
+                    // count provided — remove and return N elements as array
+                    int count = Math.min(Integer.parseInt(parts[2]), popList.size());
+                    StringBuilder sb = new StringBuilder("*" + count + "\r\n");
+                    for (int i = 0; i < count; i++) {
+                      String el = popList.remove(0);
+                      sb.append("$").append(el.length()).append("\r\n").append(el).append("\r\n");
+                    }
+                    out.write(sb.toString().getBytes());
+                  }
                 }
               }
               break;
