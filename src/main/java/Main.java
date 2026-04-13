@@ -4,8 +4,8 @@ import java.net.Socket;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Main {
-  // Shared store across all clients
   static ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
+  static ConcurrentHashMap<String, Long> expiry = new ConcurrentHashMap<>(); // key → expiry time in ms
 
   public static void main(String[] args) {
     System.out.println("Logs from your program will appear here!");
@@ -37,8 +37,8 @@ public class Main {
           String[] parts = new String[numArgs];
 
           for (int i = 0; i < numArgs; i++) {
-            in.readLine();             // skip $<length>
-            parts[i] = in.readLine(); // read value
+            in.readLine();
+            parts[i] = in.readLine();
           }
 
           String command = parts[0].toUpperCase();
@@ -55,15 +55,30 @@ public class Main {
 
             case "SET":
               store.put(parts[1], parts[2]);
+              // Check for PX option: SET key value PX 100
+              if (parts.length >= 5 && parts[3].toUpperCase().equals("PX")) {
+                long ttl = Long.parseLong(parts[4]);
+                expiry.put(parts[1], System.currentTimeMillis() + ttl);
+              } else {
+                expiry.remove(parts[1]); // clear any previous expiry
+              }
               out.write("+OK\r\n".getBytes());
               break;
 
             case "GET":
-              String val = store.get(parts[1]);
-              if (val == null) {
+              String key = parts[1];
+              // Check if key is expired
+              if (expiry.containsKey(key) && System.currentTimeMillis() > expiry.get(key)) {
+                store.remove(key);
+                expiry.remove(key);
                 out.write("$-1\r\n".getBytes());
               } else {
-                out.write(("$" + val.length() + "\r\n" + val + "\r\n").getBytes());
+                String val = store.get(key);
+                if (val == null) {
+                  out.write("$-1\r\n".getBytes());
+                } else {
+                  out.write(("$" + val.length() + "\r\n" + val + "\r\n").getBytes());
+                }
               }
               break;
           }
