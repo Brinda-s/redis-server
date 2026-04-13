@@ -91,14 +91,37 @@ public class Main {
             }
 
             case "XADD": {
-              // XADD stream_key id field1 val1 field2 val2 ...
               String sKey = parts[1];
               String id   = parts[2];
+              String[] idParts = id.split("-");
+              long newMs  = Long.parseLong(idParts[0]);
+              long newSeq = Long.parseLong(idParts[1]);
+
+              // 0-0 is always invalid
+              if (newMs == 0 && newSeq == 0) {
+                out.write("-ERR The ID specified in XADD must be greater than 0-0\r\n".getBytes());
+                break;
+              }
+
+              // Validate against last entry in stream
+              List<StreamEntry> stream = streamStore.computeIfAbsent(sKey, k -> new ArrayList<>());
+              if (!stream.isEmpty()) {
+                StreamEntry last = stream.get(stream.size() - 1);
+                String[] lastParts = last.id.split("-");
+                long lastMs  = Long.parseLong(lastParts[0]);
+                long lastSeq = Long.parseLong(lastParts[1]);
+
+                if (newMs < lastMs || (newMs == lastMs && newSeq <= lastSeq)) {
+                  out.write("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n".getBytes());
+                  break;
+                }
+              }
+
               StreamEntry entry = new StreamEntry(id);
               for (int i = 3; i + 1 < parts.length; i += 2) {
                 entry.fields.put(parts[i], parts[i + 1]);
               }
-              streamStore.computeIfAbsent(sKey, k -> new ArrayList<>()).add(entry);
+              stream.add(entry);
               out.write(("$" + id.length() + "\r\n" + id + "\r\n").getBytes());
               break;
             }
