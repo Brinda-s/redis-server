@@ -93,6 +93,9 @@ public class Main {
               } else {
                 synchronized (lList) {
                   int size = lList.size();
+                  // convert negative indexes to positive
+                  if (start < 0) start = Math.max(0, size + start);
+                  if (stop  < 0) stop  = size + stop;
                   if (start >= size || start > stop) {
                     out.write("*0\r\n".getBytes());
                   } else {
