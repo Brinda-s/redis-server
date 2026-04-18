@@ -38,14 +38,30 @@ public class Main {
       if (args[i].equals("--replicaof")) role = "slave";
     }
 
-    // Connect to master and send PING
+    // Connect to master and send handshake
     if (masterHost != null) {
       try {
         Socket masterSocket = new Socket(masterHost, masterPort);
         OutputStream masterOut = masterSocket.getOutputStream();
+        BufferedReader masterIn = new BufferedReader(new InputStreamReader(masterSocket.getInputStream()));
+
         // Step 1: PING
         masterOut.write("*1\r\n$4\r\nPING\r\n".getBytes());
         masterOut.flush();
+        masterIn.readLine(); // read +PONG
+
+        // Step 2a: REPLCONF listening-port <PORT>
+        String portStr = String.valueOf(port);
+        masterOut.write(("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$"
+            + portStr.length() + "\r\n" + portStr + "\r\n").getBytes());
+        masterOut.flush();
+        masterIn.readLine(); // read +OK
+
+        // Step 2b: REPLCONF capa psync2
+        masterOut.write("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n".getBytes());
+        masterOut.flush();
+        masterIn.readLine(); // read +OK
+
       } catch (IOException e) {
         System.out.println("Failed to connect to master: " + e.getMessage());
       }
