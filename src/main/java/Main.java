@@ -44,6 +44,9 @@ public class Main {
         String command = parts[0].toUpperCase();
 
         switch (command) {
+          case "MULTI":
+            out.write("+OK\r\n".getBytes()); break;
+
           case "INCR": {
             String k = parts[1];
             String v = store.get(k);
