@@ -20,7 +20,13 @@ public class Main {
 
   public static void main(String[] args) {
     System.out.println("Logs from your program will appear here!");
-    int port = 6379;
+    int port = 6379; // default
+    for (int i = 0; i < args.length - 1; i++) {
+      if (args[i].equals("--port")) {
+        port = Integer.parseInt(args[i + 1]);
+        break;
+      }
+    }
     try {
       ServerSocket serverSocket = new ServerSocket(port);
       serverSocket.setReuseAddress(true);
