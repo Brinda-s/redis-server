@@ -35,6 +35,8 @@ public class Main {
     try {
       BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
       OutputStream out = clientSocket.getOutputStream();
+      boolean inMulti = false;          // are we inside a MULTI block?
+      List<String[]> queue = new ArrayList<>(); // queued commands
       String line;
       while ((line = in.readLine()) != null) {
         if (!line.startsWith("*")) continue;
@@ -45,9 +47,17 @@ public class Main {
 
         switch (command) {
           case "EXEC":
-            out.write("-ERR EXEC without MULTI\r\n".getBytes()); break;
+            if (!inMulti) {
+              out.write("-ERR EXEC without MULTI\r\n".getBytes());
+            } else {
+              inMulti = false;
+              out.write(("*" + queue.size() + "\r\n").getBytes()); // empty array for now
+              queue.clear();
+            }
+            break;
 
           case "MULTI":
+            inMulti = true;
             out.write("+OK\r\n".getBytes()); break;
 
           case "INCR": {
