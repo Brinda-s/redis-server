@@ -11,6 +11,7 @@ public class Main {
   static ConcurrentHashMap<String, LinkedList<Object>> waiters = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, List<StreamEntry>> streamStore = new ConcurrentHashMap<>();
   static String role = "master";
+  static java.util.concurrent.CopyOnWriteArrayList<OutputStream> replicaOutputs = new java.util.concurrent.CopyOnWriteArrayList<>();
   static ConcurrentHashMap<String, LinkedList<Object>> streamWaiters = new ConcurrentHashMap<>();
 
   static class StreamEntry {
@@ -127,7 +128,10 @@ public class Main {
             out.write("+OK\r\n".getBytes());
           }
         } else {
-          out.write(execCommand(command, parts, out).getBytes());
+          String resp = execCommand(command, parts, out);
+          if (!resp.isEmpty()) out.write(resp.getBytes());
+          // After PSYNC, register this connection as a replica
+          if (command.equals("PSYNC")) replicaOutputs.add(out);
         }
         out.flush();
       }
@@ -166,6 +170,7 @@ public class Main {
         if (parts.length >= 5 && parts[3].toUpperCase().equals("PX"))
           expiry.put(parts[1], System.currentTimeMillis() + Long.parseLong(parts[4]));
         else expiry.remove(parts[1]);
+        propagate(parts);
         return "+OK\r\n";
 
       case "GET": {
@@ -424,6 +429,16 @@ public class Main {
           .append("$").append(f.getValue().length()).append("\r\n").append(f.getValue()).append("\r\n");
     }
     return sb.toString();
+  }
+
+  // Propagate a command to all connected replicas as a RESP array
+  private static void propagate(String[] parts) {
+    StringBuilder sb = new StringBuilder("*" + parts.length + "\r\n");
+    for (String p : parts) sb.append("$").append(p.length()).append("\r\n").append(p).append("\r\n");
+    byte[] msg = sb.toString().getBytes();
+    for (OutputStream o : replicaOutputs) {
+      try { o.write(msg); o.flush(); } catch (IOException e) { replicaOutputs.remove(o); }
+    }
   }
 
   private static void notifyWaiter(String key) {
