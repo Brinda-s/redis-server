@@ -145,6 +145,8 @@ public class Main {
         return "$" + info.length() + "\r\n" + info + "\r\n";
       }
 
+      case "REPLCONF": return "+OK\r\n";
+
       case "PING": return "+PONG\r\n";
 
       case "ECHO": return "$" + parts[1].length() + "\r\n" + parts[1] + "\r\n";
