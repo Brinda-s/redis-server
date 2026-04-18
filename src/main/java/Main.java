@@ -94,12 +94,6 @@ public class Main {
   // Executes a single command and returns the RESP response as a String
   private static String execCommand(String command, String[] parts, OutputStream out) throws InterruptedException, IOException {
     switch (command) {
-      case "INFO": {
-        String section = parts.length > 1 ? parts[1].toLowerCase() : "";
-        String info = "role:master";
-        return "$" + info.length() + "\r\n" + info + "\r\n";
-      }
-
       case "PING": return "+PONG\r\n";
 
       case "ECHO": return "$" + parts[1].length() + "\r\n" + parts[1] + "\r\n";
