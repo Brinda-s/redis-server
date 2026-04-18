@@ -21,10 +21,34 @@ public class Main {
 
   public static void main(String[] args) {
     System.out.println("Logs from your program will appear here!");
-    int port = 6379; // default
+    // If replica, connect to master and send handshake
+    String masterHost = null;
+    int masterPort = -1;
+    for (int i = 0; i < args.length - 1; i++) {
+      if (args[i].equals("--replicaof")) {
+        String[] hp = args[i + 1].split(" ");
+        masterHost = hp[0];
+        masterPort = Integer.parseInt(hp[1]);
+      }
+    }
+
+    int port = 6379;
     for (int i = 0; i < args.length - 1; i++) {
       if (args[i].equals("--port")) port = Integer.parseInt(args[i + 1]);
       if (args[i].equals("--replicaof")) role = "slave";
+    }
+
+    // Connect to master and send PING
+    if (masterHost != null) {
+      try {
+        Socket masterSocket = new Socket(masterHost, masterPort);
+        OutputStream masterOut = masterSocket.getOutputStream();
+        // Step 1: PING
+        masterOut.write("*1\r\n$4\r\nPING\r\n".getBytes());
+        masterOut.flush();
+      } catch (IOException e) {
+        System.out.println("Failed to connect to master: " + e.getMessage());
+      }
     }
     try {
       ServerSocket serverSocket = new ServerSocket(port);
