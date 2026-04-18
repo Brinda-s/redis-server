@@ -44,6 +44,20 @@ public class Main {
         String command = parts[0].toUpperCase();
 
         switch (command) {
+          case "INCR": {
+            String k = parts[1];
+            String v = store.get(k);
+            if (v == null) v = "0"; // key doesn't exist → treat as 0
+            try {
+              long num = Long.parseLong(v) + 1;
+              store.put(k, String.valueOf(num));
+              out.write((":" + num + "\r\n").getBytes());
+            } catch (NumberFormatException e) {
+              out.write("-ERR value is not an integer or out of range\r\n".getBytes());
+            }
+            break;
+          }
+
           case "PING": out.write("+PONG\r\n".getBytes()); break;
 
           case "ECHO":
