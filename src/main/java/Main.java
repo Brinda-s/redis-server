@@ -10,6 +10,7 @@ public class Main {
   static ConcurrentHashMap<String, List<String>> listStore = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, LinkedList<Object>> waiters = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, List<StreamEntry>> streamStore = new ConcurrentHashMap<>();
+  static String role = "master";
   static ConcurrentHashMap<String, LinkedList<Object>> streamWaiters = new ConcurrentHashMap<>();
 
   static class StreamEntry {
@@ -22,10 +23,8 @@ public class Main {
     System.out.println("Logs from your program will appear here!");
     int port = 6379; // default
     for (int i = 0; i < args.length - 1; i++) {
-      if (args[i].equals("--port")) {
-        port = Integer.parseInt(args[i + 1]);
-        break;
-      }
+      if (args[i].equals("--port")) port = Integer.parseInt(args[i + 1]);
+      if (args[i].equals("--replicaof")) role = "slave";
     }
     try {
       ServerSocket serverSocket = new ServerSocket(port);
@@ -94,6 +93,12 @@ public class Main {
   // Executes a single command and returns the RESP response as a String
   private static String execCommand(String command, String[] parts, OutputStream out) throws InterruptedException, IOException {
     switch (command) {
+      case "INFO": {
+        String section = parts.length > 1 ? parts[1].toLowerCase() : "";
+        String info = "role:" + role;
+        return "$" + info.length() + "\r\n" + info + "\r\n";
+      }
+
       case "PING": return "+PONG\r\n";
 
       case "ECHO": return "$" + parts[1].length() + "\r\n" + parts[1] + "\r\n";
