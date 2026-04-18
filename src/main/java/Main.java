@@ -44,6 +44,9 @@ public class Main {
         String command = parts[0].toUpperCase();
 
         switch (command) {
+          case "EXEC":
+            out.write("-ERR EXEC without MULTI\r\n".getBytes()); break;
+
           case "MULTI":
             out.write("+OK\r\n".getBytes()); break;
 
