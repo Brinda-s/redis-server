@@ -54,21 +54,17 @@ public class Main {
           continue;
         }
 
-        // Execute command normally
-        out.write(execCommand(command, parts, out).getBytes());
-
-        // Handle MULTI/EXEC/DISCARD state transitions
+        // Handle transaction control commands directly
         if (command.equals("MULTI")) {
           inMulti = true;
+          out.write("+OK\r\n".getBytes());
         } else if (command.equals("EXEC")) {
           if (!inMulti) {
-            // error already written by execCommand
+            out.write("-ERR EXEC without MULTI\r\n".getBytes());
           } else {
             inMulti = false;
             StringBuilder sb = new StringBuilder("*" + txQueue.size() + "\r\n");
-            for (String[] cmd : txQueue) {
-              sb.append(execCommand(cmd[0].toUpperCase(), cmd, out));
-            }
+            for (String[] cmd : txQueue) sb.append(execCommand(cmd[0].toUpperCase(), cmd, out));
             txQueue.clear();
             out.write(sb.toString().getBytes());
           }
@@ -80,6 +76,8 @@ public class Main {
             txQueue.clear();
             out.write("+OK\r\n".getBytes());
           }
+        } else {
+          out.write(execCommand(command, parts, out).getBytes());
         }
         out.flush();
       }
