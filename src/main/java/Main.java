@@ -146,7 +146,14 @@ public class Main {
       }
 
       case "PSYNC":
-        return "+FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0\r\n";
+        // Send FULLRESYNC then immediately send empty RDB file
+        byte[] rdb = java.util.Base64.getDecoder().decode(
+          "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==");
+        out.write("+FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0\r\n".getBytes());
+        out.write(("$" + rdb.length + "\r\n").getBytes());
+        out.write(rdb);
+        out.flush();
+        return ""; // already written directly
 
       case "REPLCONF": return "+OK\r\n";
 
@@ -361,17 +368,29 @@ public class Main {
       }
 
       case "LPUSH": {
-        String k = parts[1]; listStore.putIfAbsent(k, new ArrayList<>()); List<String> l = listStore.get(k);
-        synchronized (l) { for (int i = 2; i < parts.length; i++) l.add(0, parts[i]); }
+        String k = parts[1];
+        listStore.putIfAbsent(k, new ArrayList<>());
+        List<String> l = listStore.get(k);
+        int size;
+        synchronized (l) {
+          for (int i = 2; i < parts.length; i++) l.add(0, parts[i]);
+          size = l.size();
+        }
         notifyWaiter(k);
-        return ":" + listStore.get(k).size() + "\r\n";
+        return ":" + size + "\r\n";
       }
 
       case "RPUSH": {
-        String k = parts[1]; listStore.putIfAbsent(k, new ArrayList<>()); List<String> l = listStore.get(k);
-        synchronized (l) { for (int i = 2; i < parts.length; i++) l.add(parts[i]); }
+        String k = parts[1];
+        listStore.putIfAbsent(k, new ArrayList<>());
+        List<String> l = listStore.get(k);
+        int size;
+        synchronized (l) {
+          for (int i = 2; i < parts.length; i++) l.add(parts[i]);
+          size = l.size(); // capture BEFORE notify can trigger a pop
+        }
         notifyWaiter(k);
-        return ":" + listStore.get(k).size() + "\r\n";
+        return ":" + size + "\r\n";
       }
 
       case "LRANGE": {
