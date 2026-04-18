@@ -62,6 +62,11 @@ public class Main {
         masterOut.flush();
         masterIn.readLine(); // read +OK
 
+        // Step 3: PSYNC ? -1
+        masterOut.write("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n".getBytes());
+        masterOut.flush();
+        masterIn.readLine(); // read +FULLRESYNC <id> 0
+
       } catch (IOException e) {
         System.out.println("Failed to connect to master: " + e.getMessage());
       }
