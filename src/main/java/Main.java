@@ -43,30 +43,51 @@ public class Main {
     if (masterHost != null) {
       try {
         Socket masterSocket = new Socket(masterHost, masterPort);
+        InputStream masterRawIn = masterSocket.getInputStream();
         OutputStream masterOut = masterSocket.getOutputStream();
-        BufferedReader masterIn = new BufferedReader(new InputStreamReader(masterSocket.getInputStream()));
 
         // Step 1: PING
-        masterOut.write("*1\r\n$4\r\nPING\r\n".getBytes());
-        masterOut.flush();
-        masterIn.readLine(); // read +PONG
+        masterOut.write("*1\r\n$4\r\nPING\r\n".getBytes()); masterOut.flush();
+        readLineRaw(masterRawIn); // +PONG
 
-        // Step 2a: REPLCONF listening-port <PORT>
+        // Step 2a: REPLCONF listening-port
         String portStr = String.valueOf(port);
         masterOut.write(("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$"
             + portStr.length() + "\r\n" + portStr + "\r\n").getBytes());
         masterOut.flush();
-        masterIn.readLine(); // read +OK
+        readLineRaw(masterRawIn); // +OK
 
         // Step 2b: REPLCONF capa psync2
         masterOut.write("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n".getBytes());
         masterOut.flush();
-        masterIn.readLine(); // read +OK
+        readLineRaw(masterRawIn); // +OK
 
-        // Step 3: PSYNC ? -1
+        // Step 3: PSYNC
         masterOut.write("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n".getBytes());
         masterOut.flush();
-        masterIn.readLine(); // read +FULLRESYNC <id> 0
+        readLineRaw(masterRawIn); // +FULLRESYNC ...
+
+        // Skip RDB file: $<len>\r\n<bytes>  (no trailing \r\n)
+        String rdbHeader = readLineRaw(masterRawIn); // e.g. "$88"
+        int rdbLen = Integer.parseInt(rdbHeader.substring(1));
+        long skipped = 0;
+        while (skipped < rdbLen) skipped += masterRawIn.skip(rdbLen - skipped);
+
+        // Process propagated commands from master in background thread
+        new Thread(() -> {
+          try {
+            BufferedReader propIn = new BufferedReader(new InputStreamReader(masterRawIn));
+            String line;
+            while ((line = propIn.readLine()) != null) {
+              if (!line.startsWith("*")) continue;
+              int numArgs = Integer.parseInt(line.substring(1));
+              String[] parts = new String[numArgs];
+              for (int i = 0; i < numArgs; i++) { propIn.readLine(); parts[i] = propIn.readLine(); }
+              // Process silently — no response sent back to master
+              try { execCommand(parts[0].toUpperCase(), parts, null); } catch (Exception ignored) {}
+            }
+          } catch (IOException e) { System.out.println("Replica read error: " + e.getMessage()); }
+        }).start();
 
       } catch (IOException e) {
         System.out.println("Failed to connect to master: " + e.getMessage());
@@ -150,6 +171,7 @@ public class Main {
       }
 
       case "PSYNC":
+        if (out == null) return "";
         // Send FULLRESYNC then immediately send empty RDB file
         byte[] rdb = java.util.Base64.getDecoder().decode(
           "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==");
@@ -432,6 +454,17 @@ public class Main {
   }
 
   // Propagate a command to all connected replicas as a RESP array
+  // Read a \r\n terminated line from raw InputStream
+  private static String readLineRaw(InputStream in) throws IOException {
+    StringBuilder sb = new StringBuilder();
+    int c;
+    while ((c = in.read()) != -1) {
+      if (c == '\r') { in.read(); break; } // consume \n
+      sb.append((char) c);
+    }
+    return sb.toString();
+  }
+
   private static void propagate(String[] parts) {
     StringBuilder sb = new StringBuilder("*" + parts.length + "\r\n");
     for (String p : parts) sb.append("$").append(p.length()).append("\r\n").append(p).append("\r\n");
