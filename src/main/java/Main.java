@@ -120,7 +120,16 @@ public class Main {
                 masterOut.write(("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$"
                     + ackOffset.length() + "\r\n" + ackOffset + "\r\n").getBytes());
                 masterOut.flush();
-              } else {
+              } else if (command.equals("SUBSCRIBE")) {
+          StringBuilder sb = new StringBuilder();
+          for (int i = 1; i < parts.length; i++) {
+            String ch = parts[i];
+            subscribedChannels.add(ch); // deduplicates automatically
+            sb.append("*3\r\n$9\r\nsubscribe\r\n$").append(ch.length()).append("\r\n").append(ch)
+              .append("\r\n:").append(subscribedChannels.size()).append("\r\n");
+          }
+          out.write(sb.toString().getBytes());
+        } else {
                 try { execCommand(parts[0].toUpperCase(), parts, null); } catch (Exception ignored) {}
               }
               replicaOffset += cmdBytes;
@@ -145,6 +154,7 @@ public class Main {
       OutputStream out = clientSocket.getOutputStream();
       boolean inMulti = false;
       List<String[]> txQueue = new ArrayList<>();
+      Set<String> subscribedChannels = new HashSet<>(); // per-client subscriptions
 
       String line;
       while ((line = in.readLine()) != null) {
@@ -226,15 +236,6 @@ public class Main {
 
   private static String execCommand(String command, String[] parts, OutputStream out) throws InterruptedException, IOException {
     switch (command) {
-      case "SUBSCRIBE": {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 1; i < parts.length; i++) {
-          String ch = parts[i];
-          sb.append("*3\r\n$9\r\nsubscribe\r\n$").append(ch.length()).append("\r\n").append(ch).append("\r\n:").append(i).append("\r\n");
-        }
-        return sb.toString();
-      }
-
       case "KEYS": {
         // Only support "*" pattern for now
         List<String> keys = new ArrayList<>(store.keySet());
