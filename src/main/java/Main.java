@@ -175,11 +175,13 @@ public class Main {
         } else {
           String resp = execCommand(command, parts, out);
           if (!resp.isEmpty()) out.write(resp.getBytes());
-          // Register replica after PSYNC: store both streams and start ACK reader
+          // After PSYNC: register replica, hand off the reader, stop handling here
           if (command.equals("PSYNC")) {
             ReplicaState rs = new ReplicaState(out, clientSocket.getInputStream());
             replicas.add(rs);
-            startAckReader(rs);
+            out.flush();
+            startAckReader(rs, in); // pass the SAME BufferedReader
+            return; // stop handleClient loop — replica only sends ACKs from now on
           }
         }
         out.flush();
@@ -189,17 +191,15 @@ public class Main {
   }
 
   // Background thread reading REPLCONF ACK responses from a replica
-  private static void startAckReader(ReplicaState rs) {
+  private static void startAckReader(ReplicaState rs, BufferedReader reader) {
     new Thread(() -> {
       try {
-        BufferedReader reader = new BufferedReader(new InputStreamReader(rs.in));
         String line;
         while ((line = reader.readLine()) != null) {
           if (!line.startsWith("*")) continue;
           int n = Integer.parseInt(line.substring(1));
           String[] parts = new String[n];
           for (int i = 0; i < n; i++) { reader.readLine(); parts[i] = reader.readLine(); }
-          // REPLCONF ACK <offset>
           if (n == 3 && parts[0].toUpperCase().equals("REPLCONF")
               && parts[1].toUpperCase().equals("ACK")) {
             rs.ackOffset = Long.parseLong(parts[2]);
