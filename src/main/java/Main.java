@@ -130,6 +130,7 @@ public class Main {
   }
 
   private static void handleClient(Socket clientSocket) {
+    boolean isReplica = false;
     try {
       BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
       OutputStream out = clientSocket.getOutputStream();
@@ -175,19 +176,24 @@ public class Main {
         } else {
           String resp = execCommand(command, parts, out);
           if (!resp.isEmpty()) out.write(resp.getBytes());
-          // After PSYNC: register replica, hand off the reader, stop handling here
           if (command.equals("PSYNC")) {
             ReplicaState rs = new ReplicaState(out, clientSocket.getInputStream());
             replicas.add(rs);
             out.flush();
-            startAckReader(rs, in); // pass the SAME BufferedReader
-            return; // stop handleClient loop — replica only sends ACKs from now on
+            startAckReader(rs, in);
+            isReplica = true; // don't close socket in finally
+            return;
           }
         }
         out.flush();
       }
     } catch (IOException | InterruptedException e) { System.out.println("Exception: " + e.getMessage()); }
-    finally { try { clientSocket.close(); } catch (IOException e) { System.out.println("IOException: " + e.getMessage()); } }
+    finally {
+      // Never close a replica socket — it must stay open for propagation
+      if (!isReplica) {
+        try { clientSocket.close(); } catch (IOException e) { System.out.println("IOException: " + e.getMessage()); }
+      }
+    }
   }
 
   // Background thread reading REPLCONF ACK responses from a replica
