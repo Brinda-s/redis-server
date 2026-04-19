@@ -14,6 +14,8 @@ public class Main {
   static ConcurrentHashMap<String, List<StreamEntry>> streamStore = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, LinkedList<Object>> streamWaiters = new ConcurrentHashMap<>();
   static String role = "master";
+  static String dir = "";
+  static String dbfilename = "";
 
   // Per-replica state: tracks output stream and last acknowledged offset
   static class ReplicaState {
@@ -48,6 +50,8 @@ public class Main {
     for (int i = 0; i < args.length - 1; i++) {
       if (args[i].equals("--port")) port = Integer.parseInt(args[i + 1]);
       if (args[i].equals("--replicaof")) role = "slave";
+      if (args[i].equals("--dir")) dir = args[i + 1];
+      if (args[i].equals("--dbfilename")) dbfilename = args[i + 1];
     }
 
     try {
@@ -217,6 +221,15 @@ public class Main {
 
   private static String execCommand(String command, String[] parts, OutputStream out) throws InterruptedException, IOException {
     switch (command) {
+      case "CONFIG": {
+        if (parts.length >= 3 && parts[1].toUpperCase().equals("GET")) {
+          String param = parts[2].toLowerCase();
+          String value = param.equals("dir") ? dir : param.equals("dbfilename") ? dbfilename : "";
+          return "*2\r\n$" + param.length() + "\r\n" + param + "\r\n$" + value.length() + "\r\n" + value + "\r\n";
+        }
+        return "-ERR unknown config command\r\n";
+      }
+
       case "PING": return "+PONG\r\n";
       case "ECHO": return "$" + parts[1].length() + "\r\n" + parts[1] + "\r\n";
 
