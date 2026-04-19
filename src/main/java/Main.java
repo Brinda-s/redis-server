@@ -243,8 +243,6 @@ public class Main {
         out.flush();
         return "";
 
-      case "PSYNC": return "+FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0\r\n";
-
       case "REPLCONF": return "+OK\r\n";
 
       case "MULTI":   return "+OK\r\n";
