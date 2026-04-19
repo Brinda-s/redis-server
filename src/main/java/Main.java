@@ -3,6 +3,8 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class Main {
   static ConcurrentHashMap<String, String> store = new ConcurrentHashMap<>();
@@ -10,10 +12,18 @@ public class Main {
   static ConcurrentHashMap<String, List<String>> listStore = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, LinkedList<Object>> waiters = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, List<StreamEntry>> streamStore = new ConcurrentHashMap<>();
-  static String role = "master";
   static ConcurrentHashMap<String, LinkedList<Object>> streamWaiters = new ConcurrentHashMap<>();
-  static java.util.concurrent.CopyOnWriteArrayList<OutputStream> replicaOutputs =
-      new java.util.concurrent.CopyOnWriteArrayList<>();
+  static String role = "master";
+
+  // Per-replica state: tracks output stream and last acknowledged offset
+  static class ReplicaState {
+    OutputStream out;
+    InputStream in;
+    volatile long ackOffset = 0;
+    ReplicaState(OutputStream out, InputStream in) { this.out = out; this.in = in; }
+  }
+  static CopyOnWriteArrayList<ReplicaState> replicas = new CopyOnWriteArrayList<>();
+  static AtomicLong masterOffset = new AtomicLong(0); // bytes propagated so far
 
   static class StreamEntry {
     String id;
@@ -44,36 +54,32 @@ public class Main {
       ServerSocket serverSocket = new ServerSocket(port);
       serverSocket.setReuseAddress(true);
 
-      // Start handshake with master in background AFTER server is listening
       if (masterHost != null) {
         final String mHost = masterHost;
         final int mPort = masterPort;
         final int finalPort = port;
         new Thread(() -> {
           try {
-            System.err.println("[replica] Thread started");
             Socket masterSocket = new Socket(mHost, mPort);
             masterSocket.setTcpNoDelay(true);
             InputStream masterRawIn = masterSocket.getInputStream();
             OutputStream masterOut = masterSocket.getOutputStream();
 
             masterOut.write("*1\r\n$4\r\nPING\r\n".getBytes()); masterOut.flush();
-            System.err.println("[replica] Got: " + readLineRaw(masterRawIn));
+            readLineRaw(masterRawIn);
 
             String portStr = String.valueOf(finalPort);
             masterOut.write(("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$"
                 + portStr.length() + "\r\n" + portStr + "\r\n").getBytes()); masterOut.flush();
-            System.err.println("[replica] Got: " + readLineRaw(masterRawIn));
+            readLineRaw(masterRawIn);
 
             masterOut.write("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n".getBytes()); masterOut.flush();
-            System.err.println("[replica] Got: " + readLineRaw(masterRawIn));
+            readLineRaw(masterRawIn);
 
             masterOut.write("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n".getBytes()); masterOut.flush();
-            System.err.println("[replica] Got: " + readLineRaw(masterRawIn));
+            readLineRaw(masterRawIn); // +FULLRESYNC
 
-            // Skip RDB
             String rdbHeader = readLineRaw(masterRawIn);
-            System.err.println("[replica] RDB header: " + rdbHeader);
             int rdbLen = Integer.parseInt(rdbHeader.substring(1).trim());
             byte[] rdbBuf = new byte[rdbLen];
             int totalRead = 0;
@@ -82,24 +88,19 @@ public class Main {
               if (n == -1) break;
               totalRead += n;
             }
-            System.err.println("[replica] RDB done, entering propagation loop");
 
-            // Process propagated commands
             long replicaOffset = 0;
             String line;
             while ((line = readLineRaw(masterRawIn)) != null) {
-              System.err.println("[replica] prop line: " + line);
               if (!line.startsWith("*")) continue;
               int numArgs = Integer.parseInt(line.substring(1));
               String[] parts = new String[numArgs];
               for (int i = 0; i < numArgs; i++) {
-                readLineRaw(masterRawIn); // skip $len
+                readLineRaw(masterRawIn);
                 parts[i] = readLineRaw(masterRawIn);
               }
-
               if (parts[0] == null) continue;
 
-              // Calculate byte size of this RESP command
               StringBuilder respCmd = new StringBuilder("*" + numArgs + "\r\n");
               for (String p : parts) respCmd.append("$").append(p.length()).append("\r\n").append(p).append("\r\n");
               int cmdBytes = respCmd.toString().getBytes().length;
@@ -110,15 +111,13 @@ public class Main {
                 masterOut.write(("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$"
                     + ackOffset.length() + "\r\n" + ackOffset + "\r\n").getBytes());
                 masterOut.flush();
-                System.err.println("[replica] Sent ACK " + ackOffset);
               } else {
                 try { execCommand(parts[0].toUpperCase(), parts, null); } catch (Exception ignored) {}
               }
               replicaOffset += cmdBytes;
             }
           } catch (Exception e) {
-            System.err.println("Master handshake error: " + e.getClass().getSimpleName() + ": " + e.getMessage());
-            e.printStackTrace(System.err);
+            System.err.println("Master handshake error: " + e.getMessage());
           }
         }).start();
       }
@@ -176,7 +175,12 @@ public class Main {
         } else {
           String resp = execCommand(command, parts, out);
           if (!resp.isEmpty()) out.write(resp.getBytes());
-          if (command.equals("PSYNC")) replicaOutputs.add(out);
+          // Register replica after PSYNC: store both streams and start ACK reader
+          if (command.equals("PSYNC")) {
+            ReplicaState rs = new ReplicaState(out, clientSocket.getInputStream());
+            replicas.add(rs);
+            startAckReader(rs);
+          }
         }
         out.flush();
       }
@@ -184,13 +188,30 @@ public class Main {
     finally { try { clientSocket.close(); } catch (IOException e) { System.out.println("IOException: " + e.getMessage()); } }
   }
 
+  // Background thread reading REPLCONF ACK responses from a replica
+  private static void startAckReader(ReplicaState rs) {
+    new Thread(() -> {
+      try {
+        BufferedReader reader = new BufferedReader(new InputStreamReader(rs.in));
+        String line;
+        while ((line = reader.readLine()) != null) {
+          if (!line.startsWith("*")) continue;
+          int n = Integer.parseInt(line.substring(1));
+          String[] parts = new String[n];
+          for (int i = 0; i < n; i++) { reader.readLine(); parts[i] = reader.readLine(); }
+          // REPLCONF ACK <offset>
+          if (n == 3 && parts[0].toUpperCase().equals("REPLCONF")
+              && parts[1].toUpperCase().equals("ACK")) {
+            rs.ackOffset = Long.parseLong(parts[2]);
+          }
+        }
+      } catch (IOException ignored) {}
+    }).start();
+  }
+
   private static String execCommand(String command, String[] parts, OutputStream out) throws InterruptedException, IOException {
     switch (command) {
-      case "WAIT":
-        return ":" + replicaOutputs.size() + "\r\n";
-
       case "PING": return "+PONG\r\n";
-
       case "ECHO": return "$" + parts[1].length() + "\r\n" + parts[1] + "\r\n";
 
       case "SET":
@@ -224,9 +245,9 @@ public class Main {
 
       case "TYPE": {
         String k = parts[1];
-        if (store.containsKey(k))         return "+string\r\n";
-        if (listStore.containsKey(k))     return "+list\r\n";
-        if (streamStore.containsKey(k))   return "+stream\r\n";
+        if (store.containsKey(k))       return "+string\r\n";
+        if (listStore.containsKey(k))   return "+list\r\n";
+        if (streamStore.containsKey(k)) return "+stream\r\n";
         return "+none\r\n";
       }
 
@@ -248,6 +269,33 @@ public class Main {
         return "";
 
       case "REPLCONF": return "+OK\r\n";
+
+      case "WAIT": {
+        int needed = Integer.parseInt(parts[1]);
+        long timeout = Long.parseLong(parts[2]);
+
+        // No writes yet → all replicas are in sync, return count immediately
+        if (masterOffset.get() == 0) return ":" + replicas.size() + "\r\n";
+
+        // Send GETACK to all replicas
+        byte[] getack = "*3\r\n$8\r\nREPLCONF\r\n$6\r\nGETACK\r\n$1\r\n*\r\n".getBytes();
+        for (ReplicaState rs : replicas) {
+          try { rs.out.write(getack); rs.out.flush(); } catch (IOException ignored) {}
+        }
+
+        // Wait until enough replicas ack or timeout
+        long deadline = System.currentTimeMillis() + timeout;
+        long target = masterOffset.get();
+        while (System.currentTimeMillis() < deadline) {
+          int acked = 0;
+          for (ReplicaState rs : replicas) if (rs.ackOffset >= target) acked++;
+          if (acked >= needed) return ":" + acked + "\r\n";
+          Thread.sleep(10);
+        }
+        int acked = 0;
+        for (ReplicaState rs : replicas) if (rs.ackOffset >= target) acked++;
+        return ":" + acked + "\r\n";
+      }
 
       case "MULTI":   return "+OK\r\n";
       case "EXEC":    return "-ERR EXEC without MULTI\r\n";
@@ -420,29 +468,15 @@ public class Main {
       }
 
       case "LPUSH": {
-        String k = parts[1];
-        listStore.putIfAbsent(k, new ArrayList<>());
-        List<String> l = listStore.get(k);
-        int size;
-        synchronized (l) {
-          for (int i = 2; i < parts.length; i++) l.add(0, parts[i]);
-          size = l.size();
-        }
-        notifyWaiter(k);
-        return ":" + size + "\r\n";
+        String k = parts[1]; listStore.putIfAbsent(k, new ArrayList<>()); List<String> l = listStore.get(k);
+        int size; synchronized (l) { for (int i = 2; i < parts.length; i++) l.add(0, parts[i]); size = l.size(); }
+        notifyWaiter(k); return ":" + size + "\r\n";
       }
 
       case "RPUSH": {
-        String k = parts[1];
-        listStore.putIfAbsent(k, new ArrayList<>());
-        List<String> l = listStore.get(k);
-        int size;
-        synchronized (l) {
-          for (int i = 2; i < parts.length; i++) l.add(parts[i]);
-          size = l.size();
-        }
-        notifyWaiter(k);
-        return ":" + size + "\r\n";
+        String k = parts[1]; listStore.putIfAbsent(k, new ArrayList<>()); List<String> l = listStore.get(k);
+        int size; synchronized (l) { for (int i = 2; i < parts.length; i++) l.add(parts[i]); size = l.size(); }
+        notifyWaiter(k); return ":" + size + "\r\n";
       }
 
       case "LRANGE": {
@@ -482,8 +516,9 @@ public class Main {
     StringBuilder sb = new StringBuilder("*" + parts.length + "\r\n");
     for (String p : parts) sb.append("$").append(p.length()).append("\r\n").append(p).append("\r\n");
     byte[] msg = sb.toString().getBytes();
-    for (OutputStream o : replicaOutputs) {
-      try { o.write(msg); o.flush(); } catch (IOException e) { replicaOutputs.remove(o); }
+    masterOffset.addAndGet(msg.length); // track bytes propagated
+    for (ReplicaState rs : replicas) {
+      try { rs.out.write(msg); rs.out.flush(); } catch (IOException e) { replicas.remove(rs); }
     }
   }
 
