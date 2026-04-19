@@ -186,6 +186,9 @@ public class Main {
 
   private static String execCommand(String command, String[] parts, OutputStream out) throws InterruptedException, IOException {
     switch (command) {
+      case "WAIT":
+        return ":" + replicaOutputs.size() + "\r\n";
+
       case "PING": return "+PONG\r\n";
 
       case "ECHO": return "$" + parts[1].length() + "\r\n" + parts[1] + "\r\n";
