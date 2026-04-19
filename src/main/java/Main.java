@@ -48,6 +48,7 @@ public class Main {
       if (masterHost != null) {
         final String mHost = masterHost;
         final int mPort = masterPort;
+        final int finalPort = port;
         new Thread(() -> {
           try {
             System.err.println("[replica] Thread started");
@@ -59,7 +60,7 @@ public class Main {
             masterOut.write("*1\r\n$4\r\nPING\r\n".getBytes()); masterOut.flush();
             System.err.println("[replica] Got: " + readLineRaw(masterRawIn));
 
-            String portStr = String.valueOf(port);
+            String portStr = String.valueOf(finalPort);
             masterOut.write(("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$"
                 + portStr.length() + "\r\n" + portStr + "\r\n").getBytes()); masterOut.flush();
             System.err.println("[replica] Got: " + readLineRaw(masterRawIn));
