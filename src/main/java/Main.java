@@ -156,7 +156,6 @@ public class Main {
       List<String[]> txQueue = new ArrayList<>();
       Set<String> subscribedChannels = new HashSet<>();
       boolean inSubscribed = false;
-      boolean inSubscribed = false;
 
       String line;
       while ((line = in.readLine()) != null) {
