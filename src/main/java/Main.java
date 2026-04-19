@@ -226,6 +226,15 @@ public class Main {
 
   private static String execCommand(String command, String[] parts, OutputStream out) throws InterruptedException, IOException {
     switch (command) {
+      case "SUBSCRIBE": {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 1; i < parts.length; i++) {
+          String ch = parts[i];
+          sb.append("*3\r\n$9\r\nsubscribe\r\n$").append(ch.length()).append("\r\n").append(ch).append("\r\n:").append(i).append("\r\n");
+        }
+        return sb.toString();
+      }
+
       case "KEYS": {
         // Only support "*" pattern for now
         List<String> keys = new ArrayList<>(store.keySet());
