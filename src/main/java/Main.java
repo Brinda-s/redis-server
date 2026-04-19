@@ -17,7 +17,6 @@ public class Main {
   static String dir = "";
   static String dbfilename = "";
 
-  // Per-replica state: tracks output stream and last acknowledged offset
   static class ReplicaState {
     OutputStream out;
     InputStream in;
@@ -25,7 +24,7 @@ public class Main {
     ReplicaState(OutputStream out, InputStream in) { this.out = out; this.in = in; }
   }
   static CopyOnWriteArrayList<ReplicaState> replicas = new CopyOnWriteArrayList<>();
-  static AtomicLong masterOffset = new AtomicLong(0); // bytes propagated so far
+  static AtomicLong masterOffset = new AtomicLong(0);
 
   static class StreamEntry {
     String id;
@@ -48,13 +47,12 @@ public class Main {
 
     int port = 6379;
     for (int i = 0; i < args.length - 1; i++) {
-      if (args[i].equals("--port")) port = Integer.parseInt(args[i + 1]);
-      if (args[i].equals("--replicaof")) role = "slave";
-      if (args[i].equals("--dir")) dir = args[i + 1];
+      if (args[i].equals("--port"))       port       = Integer.parseInt(args[i + 1]);
+      if (args[i].equals("--replicaof"))  role       = "slave";
+      if (args[i].equals("--dir"))        dir        = args[i + 1];
       if (args[i].equals("--dbfilename")) dbfilename = args[i + 1];
     }
 
-    // Load RDB file if it exists
     if (!dir.isEmpty() && !dbfilename.isEmpty()) {
       loadRdb(dir + "/" + dbfilename);
     }
@@ -63,10 +61,11 @@ public class Main {
       ServerSocket serverSocket = new ServerSocket(port);
       serverSocket.setReuseAddress(true);
 
+      // If replica mode, do handshake with master in background thread
       if (masterHost != null) {
         final String mHost = masterHost;
         final int mPort = masterPort;
-        final int finalPort = port;
+        final int fPort = port;
         new Thread(() -> {
           try {
             Socket masterSocket = new Socket(mHost, mPort);
@@ -75,19 +74,23 @@ public class Main {
             OutputStream masterOut = masterSocket.getOutputStream();
 
             masterOut.write("*1\r\n$4\r\nPING\r\n".getBytes()); masterOut.flush();
-            readLineRaw(masterRawIn);
+            readLineRaw(masterRawIn); // +PONG
 
-            String portStr = String.valueOf(finalPort);
+            String portStr = String.valueOf(fPort);
             masterOut.write(("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$"
-                + portStr.length() + "\r\n" + portStr + "\r\n").getBytes()); masterOut.flush();
-            readLineRaw(masterRawIn);
+                + portStr.length() + "\r\n" + portStr + "\r\n").getBytes());
+            masterOut.flush();
+            readLineRaw(masterRawIn); // +OK
 
-            masterOut.write("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n".getBytes()); masterOut.flush();
-            readLineRaw(masterRawIn);
+            masterOut.write("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n".getBytes());
+            masterOut.flush();
+            readLineRaw(masterRawIn); // +OK
 
-            masterOut.write("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n".getBytes()); masterOut.flush();
+            masterOut.write("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n".getBytes());
+            masterOut.flush();
             readLineRaw(masterRawIn); // +FULLRESYNC
 
+            // Skip RDB file
             String rdbHeader = readLineRaw(masterRawIn);
             int rdbLen = Integer.parseInt(rdbHeader.substring(1).trim());
             byte[] rdbBuf = new byte[rdbLen];
@@ -98,6 +101,7 @@ public class Main {
               totalRead += n;
             }
 
+            // Propagation loop — process commands from master silently
             long replicaOffset = 0;
             String line;
             while ((line = readLineRaw(masterRawIn)) != null) {
@@ -105,46 +109,42 @@ public class Main {
               int numArgs = Integer.parseInt(line.substring(1));
               String[] parts = new String[numArgs];
               for (int i = 0; i < numArgs; i++) {
-                readLineRaw(masterRawIn);
+                readLineRaw(masterRawIn); // skip $len
                 parts[i] = readLineRaw(masterRawIn);
               }
               if (parts[0] == null) continue;
 
+              // Calculate byte size of this command
               StringBuilder respCmd = new StringBuilder("*" + numArgs + "\r\n");
               for (String p : parts) respCmd.append("$").append(p.length()).append("\r\n").append(p).append("\r\n");
               int cmdBytes = respCmd.toString().getBytes().length;
 
               if (parts[0].toUpperCase().equals("REPLCONF") && parts.length > 1
                   && parts[1].toUpperCase().equals("GETACK")) {
+                // Respond with offset BEFORE counting this GETACK
                 String ackOffset = String.valueOf(replicaOffset);
                 masterOut.write(("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$"
                     + ackOffset.length() + "\r\n" + ackOffset + "\r\n").getBytes());
                 masterOut.flush();
-              } else if (command.equals("SUBSCRIBE")) {
-          StringBuilder sb = new StringBuilder();
-          for (int i = 1; i < parts.length; i++) {
-            String ch = parts[i];
-            subscribedChannels.add(ch); // deduplicates automatically
-            sb.append("*3\r\n$9\r\nsubscribe\r\n$").append(ch.length()).append("\r\n").append(ch)
-              .append("\r\n:").append(subscribedChannels.size()).append("\r\n");
-          }
-          out.write(sb.toString().getBytes());
-        } else {
+              } else {
                 try { execCommand(parts[0].toUpperCase(), parts, null); } catch (Exception ignored) {}
               }
               replicaOffset += cmdBytes;
             }
           } catch (Exception e) {
-            System.err.println("Master handshake error: " + e.getMessage());
+            System.err.println("Replica handshake error: " + e.getMessage());
           }
         }).start();
       }
 
+      // Accept client connections
       while (true) {
         Socket clientSocket = serverSocket.accept();
         new Thread(() -> handleClient(clientSocket)).start();
       }
-    } catch (IOException e) { System.out.println("IOException: " + e.getMessage()); }
+    } catch (IOException e) {
+      System.out.println("IOException: " + e.getMessage());
+    }
   }
 
   private static void handleClient(Socket clientSocket) {
@@ -154,7 +154,7 @@ public class Main {
       OutputStream out = clientSocket.getOutputStream();
       boolean inMulti = false;
       List<String[]> txQueue = new ArrayList<>();
-      Set<String> subscribedChannels = new HashSet<>(); // per-client subscriptions
+      Set<String> subscribedChannels = new HashSet<>();
 
       String line;
       while ((line = in.readLine()) != null) {
@@ -164,6 +164,7 @@ public class Main {
         for (int i = 0; i < numArgs; i++) { in.readLine(); parts[i] = in.readLine(); }
         String command = parts[0].toUpperCase();
 
+        // Queue commands inside MULTI block
         if (inMulti && !command.equals("EXEC") && !command.equals("DISCARD")) {
           txQueue.add(parts);
           out.write("+QUEUED\r\n".getBytes());
@@ -174,6 +175,7 @@ public class Main {
         if (command.equals("MULTI")) {
           inMulti = true;
           out.write("+OK\r\n".getBytes());
+
         } else if (command.equals("EXEC")) {
           if (!inMulti) {
             out.write("-ERR EXEC without MULTI\r\n".getBytes());
@@ -184,6 +186,7 @@ public class Main {
             txQueue.clear();
             out.write(sb.toString().getBytes());
           }
+
         } else if (command.equals("DISCARD")) {
           if (!inMulti) {
             out.write("-ERR DISCARD without MULTI\r\n".getBytes());
@@ -192,30 +195,43 @@ public class Main {
             txQueue.clear();
             out.write("+OK\r\n".getBytes());
           }
+
+        } else if (command.equals("SUBSCRIBE")) {
+          // Per-client subscription tracking with deduplication
+          StringBuilder sb = new StringBuilder();
+          for (int i = 1; i < parts.length; i++) {
+            String ch = parts[i];
+            subscribedChannels.add(ch); // HashSet deduplicates
+            sb.append("*3\r\n$9\r\nsubscribe\r\n$").append(ch.length()).append("\r\n").append(ch)
+              .append("\r\n:").append(subscribedChannels.size()).append("\r\n");
+          }
+          out.write(sb.toString().getBytes());
+
         } else {
           String resp = execCommand(command, parts, out);
           if (!resp.isEmpty()) out.write(resp.getBytes());
+          // After PSYNC, hand off this connection to the replica ACK reader
           if (command.equals("PSYNC")) {
             ReplicaState rs = new ReplicaState(out, clientSocket.getInputStream());
             replicas.add(rs);
             out.flush();
             startAckReader(rs, in);
-            isReplica = true; // don't close socket in finally
+            isReplica = true;
             return;
           }
         }
         out.flush();
       }
-    } catch (IOException | InterruptedException e) { System.out.println("Exception: " + e.getMessage()); }
-    finally {
-      // Never close a replica socket — it must stay open for propagation
+    } catch (IOException | InterruptedException e) {
+      System.out.println("Exception: " + e.getMessage());
+    } finally {
+      // Don't close replica sockets — they stay open for propagation
       if (!isReplica) {
-        try { clientSocket.close(); } catch (IOException e) { System.out.println("IOException: " + e.getMessage()); }
+        try { clientSocket.close(); } catch (IOException ignored) {}
       }
     }
   }
 
-  // Background thread reading REPLCONF ACK responses from a replica
   private static void startAckReader(ReplicaState rs, BufferedReader reader) {
     new Thread(() -> {
       try {
@@ -234,33 +250,21 @@ public class Main {
     }).start();
   }
 
-  private static String execCommand(String command, String[] parts, OutputStream out) throws InterruptedException, IOException {
+  private static String execCommand(String command, String[] parts, OutputStream out)
+      throws InterruptedException, IOException {
     switch (command) {
-      case "KEYS": {
-        // Only support "*" pattern for now
-        List<String> keys = new ArrayList<>(store.keySet());
-        StringBuilder sb = new StringBuilder("*" + keys.size() + "\r\n");
-        for (String k : keys) sb.append("$").append(k.length()).append("\r\n").append(k).append("\r\n");
-        return sb.toString();
-      }
-
-      case "CONFIG": {
-        if (parts.length >= 3 && parts[1].toUpperCase().equals("GET")) {
-          String param = parts[2].toLowerCase();
-          String value = param.equals("dir") ? dir : param.equals("dbfilename") ? dbfilename : "";
-          return "*2\r\n$" + param.length() + "\r\n" + param + "\r\n$" + value.length() + "\r\n" + value + "\r\n";
-        }
-        return "-ERR unknown config command\r\n";
-      }
 
       case "PING": return "+PONG\r\n";
-      case "ECHO": return "$" + parts[1].length() + "\r\n" + parts[1] + "\r\n";
+
+      case "ECHO":
+        return "$" + parts[1].length() + "\r\n" + parts[1] + "\r\n";
 
       case "SET":
         store.put(parts[1], parts[2]);
         if (parts.length >= 5 && parts[3].toUpperCase().equals("PX"))
           expiry.put(parts[1], System.currentTimeMillis() + Long.parseLong(parts[4]));
-        else expiry.remove(parts[1]);
+        else
+          expiry.remove(parts[1]);
         propagate(parts);
         return "+OK\r\n";
 
@@ -300,7 +304,7 @@ public class Main {
         return "$" + info.length() + "\r\n" + info + "\r\n";
       }
 
-      case "PSYNC":
+      case "PSYNC": {
         if (out == null) return "";
         byte[] rdb = java.util.Base64.getDecoder().decode(
           "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==");
@@ -309,25 +313,26 @@ public class Main {
         out.write(rdb);
         out.flush();
         return "";
+      }
 
       case "REPLCONF": return "+OK\r\n";
 
       case "WAIT": {
-        int needed = Integer.parseInt(parts[1]);
+        int needed  = Integer.parseInt(parts[1]);
         long timeout = Long.parseLong(parts[2]);
 
-        // No writes yet → all replicas are in sync, return count immediately
+        // No writes yet — all replicas are already in sync
         if (masterOffset.get() == 0) return ":" + replicas.size() + "\r\n";
 
-        // Send GETACK to all replicas
+        // Ask all replicas for their current offset
         byte[] getack = "*3\r\n$8\r\nREPLCONF\r\n$6\r\nGETACK\r\n$1\r\n*\r\n".getBytes();
         for (ReplicaState rs : replicas) {
           try { rs.out.write(getack); rs.out.flush(); } catch (IOException ignored) {}
         }
 
-        // Wait until enough replicas ack or timeout
+        // Poll until enough ack or timeout
         long deadline = System.currentTimeMillis() + timeout;
-        long target = masterOffset.get();
+        long target   = masterOffset.get();
         while (System.currentTimeMillis() < deadline) {
           int acked = 0;
           for (ReplicaState rs : replicas) if (rs.ackOffset >= target) acked++;
@@ -337,6 +342,23 @@ public class Main {
         int acked = 0;
         for (ReplicaState rs : replicas) if (rs.ackOffset >= target) acked++;
         return ":" + acked + "\r\n";
+      }
+
+      case "CONFIG": {
+        if (parts.length >= 3 && parts[1].toUpperCase().equals("GET")) {
+          String param = parts[2].toLowerCase();
+          String value = param.equals("dir") ? dir : param.equals("dbfilename") ? dbfilename : "";
+          return "*2\r\n$" + param.length() + "\r\n" + param + "\r\n$"
+              + value.length() + "\r\n" + value + "\r\n";
+        }
+        return "-ERR unknown config command\r\n";
+      }
+
+      case "KEYS": {
+        List<String> keys = new ArrayList<>(store.keySet());
+        StringBuilder sb = new StringBuilder("*" + keys.size() + "\r\n");
+        for (String k : keys) sb.append("$").append(k.length()).append("\r\n").append(k).append("\r\n");
+        return sb.toString();
       }
 
       case "MULTI":   return "+OK\r\n";
@@ -353,22 +375,26 @@ public class Main {
         List<StreamEntry> stream = streamStore.computeIfAbsent(sKey, k -> new ArrayList<>());
         if (idParts[1].equals("*")) {
           if (!stream.isEmpty()) {
-            String[] lp = stream.get(stream.size()-1).id.split("-");
+            String[] lp = stream.get(stream.size() - 1).id.split("-");
             long lMs = Long.parseLong(lp[0]), lSeq = Long.parseLong(lp[1]);
             newSeq = (newMs == lMs) ? lSeq + 1 : (newMs == 0 ? 1 : 0);
-          } else { newSeq = (newMs == 0) ? 1 : 0; }
+          } else {
+            newSeq = (newMs == 0) ? 1 : 0;
+          }
           id = newMs + "-" + newSeq;
-        } else { newSeq = Long.parseLong(idParts[1]); }
+        } else {
+          newSeq = Long.parseLong(idParts[1]);
+        }
         if (newMs == 0 && newSeq == 0)
           return "-ERR The ID specified in XADD must be greater than 0-0\r\n";
         if (!stream.isEmpty()) {
-          String[] lp = stream.get(stream.size()-1).id.split("-");
+          String[] lp = stream.get(stream.size() - 1).id.split("-");
           long lMs = Long.parseLong(lp[0]), lSeq = Long.parseLong(lp[1]);
           if (newMs < lMs || (newMs == lMs && newSeq <= lSeq))
             return "-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n";
         }
         StreamEntry entry = new StreamEntry(id);
-        for (int i = 3; i + 1 < parts.length; i += 2) entry.fields.put(parts[i], parts[i+1]);
+        for (int i = 3; i + 1 < parts.length; i += 2) entry.fields.put(parts[i], parts[i + 1]);
         stream.add(entry);
         notifyStreamWaiter(sKey);
         return "$" + id.length() + "\r\n" + id + "\r\n";
@@ -378,19 +404,26 @@ public class Main {
         String sKey = parts[1], start = parts[2], end = parts[3];
         long startMs, startSeq;
         if (start.equals("-")) { startMs = 0; startSeq = 0; }
-        else { startMs = Long.parseLong(start.contains("-") ? start.split("-")[0] : start);
-               startSeq = start.contains("-") ? Long.parseLong(start.split("-")[1]) : 0; }
+        else {
+          startMs  = Long.parseLong(start.contains("-") ? start.split("-")[0] : start);
+          startSeq = start.contains("-") ? Long.parseLong(start.split("-")[1]) : 0;
+        }
         long endMs, endSeq;
         if (end.equals("+")) { endMs = Long.MAX_VALUE; endSeq = Long.MAX_VALUE; }
-        else { endMs = Long.parseLong(end.contains("-") ? end.split("-")[0] : end);
-               endSeq = end.contains("-") ? Long.parseLong(end.split("-")[1]) : Long.MAX_VALUE; }
+        else {
+          endMs  = Long.parseLong(end.contains("-") ? end.split("-")[0] : end);
+          endSeq = end.contains("-") ? Long.parseLong(end.split("-")[1]) : Long.MAX_VALUE;
+        }
         List<StreamEntry> stream = streamStore.get(sKey);
         List<StreamEntry> results = new ArrayList<>();
-        if (stream != null) for (StreamEntry e : stream) {
-          String[] ep = e.id.split("-");
-          long eMs = Long.parseLong(ep[0]), eSeq = Long.parseLong(ep[1]);
-          if ((eMs > startMs || (eMs == startMs && eSeq >= startSeq)) &&
-              (eMs < endMs   || (eMs == endMs   && eSeq <= endSeq))) results.add(e);
+        if (stream != null) {
+          for (StreamEntry e : stream) {
+            String[] ep = e.id.split("-");
+            long eMs = Long.parseLong(ep[0]), eSeq = Long.parseLong(ep[1]);
+            if ((eMs > startMs || (eMs == startMs && eSeq >= startSeq)) &&
+                (eMs < endMs   || (eMs == endMs   && eSeq <= endSeq)))
+              results.add(e);
+          }
         }
         return encodeEntries(results);
       }
@@ -408,7 +441,7 @@ public class Main {
           xIds[i]  = parts[streamsIdx + 1 + numStreams + i];
           if (xIds[i].equals("$")) {
             List<StreamEntry> s = streamStore.get(xKeys[i]);
-            xIds[i] = (s != null && !s.isEmpty()) ? s.get(s.size()-1).id : "0-0";
+            xIds[i] = (s != null && !s.isEmpty()) ? s.get(s.size() - 1).id : "0-0";
           }
         }
         if (blocking) {
@@ -422,11 +455,14 @@ public class Main {
                 List<StreamEntry> s = streamStore.get(xKeys[i]);
                 if (s != null) {
                   String[] idP = xIds[i].split("-");
-                  long aMs = Long.parseLong(idP[0]), aSeq = idP.length > 1 ? Long.parseLong(idP[1]) : 0;
+                  long aMs = Long.parseLong(idP[0]);
+                  long aSeq = idP.length > 1 ? Long.parseLong(idP[1]) : 0;
                   for (StreamEntry e : s) {
                     String[] ep = e.id.split("-");
-                    if (Long.parseLong(ep[0]) > aMs || (Long.parseLong(ep[0]) == aMs && Long.parseLong(ep[1]) > aSeq))
-                    { hasResults = true; break; }
+                    if (Long.parseLong(ep[0]) > aMs ||
+                        (Long.parseLong(ep[0]) == aMs && Long.parseLong(ep[1]) > aSeq)) {
+                      hasResults = true; break;
+                    }
                   }
                 }
                 if (hasResults) break;
@@ -434,7 +470,10 @@ public class Main {
               if (hasResults) break;
               long remaining = deadline - System.currentTimeMillis();
               if (remaining <= 0) {
-                for (String k : xKeys) { LinkedList<Object> q = streamWaiters.get(k); if (q != null) q.remove(lock); }
+                for (String k : xKeys) {
+                  LinkedList<Object> q = streamWaiters.get(k);
+                  if (q != null) q.remove(lock);
+                }
                 if (out != null) { out.write("*-1\r\n".getBytes()); out.flush(); }
                 return "";
               }
@@ -446,13 +485,16 @@ public class Main {
         for (int i = 0; i < numStreams; i++) {
           String xKey = xKeys[i], xId = xIds[i];
           String[] idP = xId.split("-");
-          long afterMs = Long.parseLong(idP[0]), afterSeq = idP.length > 1 ? Long.parseLong(idP[1]) : 0;
+          long afterMs  = Long.parseLong(idP[0]);
+          long afterSeq = idP.length > 1 ? Long.parseLong(idP[1]) : 0;
           List<StreamEntry> stream = streamStore.get(xKey);
           List<StreamEntry> results = new ArrayList<>();
-          if (stream != null) for (StreamEntry e : stream) {
-            String[] ep = e.id.split("-");
-            long eMs = Long.parseLong(ep[0]), eSeq = Long.parseLong(ep[1]);
-            if (eMs > afterMs || (eMs == afterMs && eSeq > afterSeq)) results.add(e);
+          if (stream != null) {
+            for (StreamEntry e : stream) {
+              String[] ep = e.id.split("-");
+              long eMs = Long.parseLong(ep[0]), eSeq = Long.parseLong(ep[1]);
+              if (eMs > afterMs || (eMs == afterMs && eSeq > afterSeq)) results.add(e);
+            }
           }
           sb.append("*2\r\n$").append(xKey.length()).append("\r\n").append(xKey).append("\r\n");
           sb.append(encodeEntries(results));
@@ -480,12 +522,16 @@ public class Main {
             }
             if (popped != null) break;
             long remaining = deadline - System.currentTimeMillis();
-            if (remaining <= 0) { LinkedList<Object> q = waiters.get(bKey); if (q != null) q.remove(lock); break; }
+            if (remaining <= 0) {
+              LinkedList<Object> q = waiters.get(bKey);
+              if (q != null) q.remove(lock);
+              break;
+            }
             lock.wait(remaining);
           }
         }
-        return popped == null ? "*-1\r\n"
-          : "*2\r\n$" + bKey.length() + "\r\n" + bKey + "\r\n$" + popped.length() + "\r\n" + popped + "\r\n";
+        if (popped == null) return "*-1\r\n";
+        return "*2\r\n$" + bKey.length() + "\r\n" + bKey + "\r\n$" + popped.length() + "\r\n" + popped + "\r\n";
       }
 
       case "LLEN": {
@@ -503,26 +549,45 @@ public class Main {
           } else {
             int count = Math.min(Integer.parseInt(parts[2]), pl.size());
             StringBuilder sb = new StringBuilder("*" + count + "\r\n");
-            for (int i = 0; i < count; i++) { String el = pl.remove(0); sb.append("$").append(el.length()).append("\r\n").append(el).append("\r\n"); }
+            for (int i = 0; i < count; i++) {
+              String el = pl.remove(0);
+              sb.append("$").append(el.length()).append("\r\n").append(el).append("\r\n");
+            }
             return sb.toString();
           }
         }
       }
 
       case "LPUSH": {
-        String k = parts[1]; listStore.putIfAbsent(k, new ArrayList<>()); List<String> l = listStore.get(k);
-        int size; synchronized (l) { for (int i = 2; i < parts.length; i++) l.add(0, parts[i]); size = l.size(); }
-        notifyWaiter(k); return ":" + size + "\r\n";
+        String k = parts[1];
+        listStore.putIfAbsent(k, new ArrayList<>());
+        List<String> l = listStore.get(k);
+        int size;
+        synchronized (l) {
+          for (int i = 2; i < parts.length; i++) l.add(0, parts[i]);
+          size = l.size();
+        }
+        notifyWaiter(k);
+        return ":" + size + "\r\n";
       }
 
       case "RPUSH": {
-        String k = parts[1]; listStore.putIfAbsent(k, new ArrayList<>()); List<String> l = listStore.get(k);
-        int size; synchronized (l) { for (int i = 2; i < parts.length; i++) l.add(parts[i]); size = l.size(); }
-        notifyWaiter(k); return ":" + size + "\r\n";
+        String k = parts[1];
+        listStore.putIfAbsent(k, new ArrayList<>());
+        List<String> l = listStore.get(k);
+        int size;
+        synchronized (l) {
+          for (int i = 2; i < parts.length; i++) l.add(parts[i]);
+          size = l.size();
+        }
+        notifyWaiter(k);
+        return ":" + size + "\r\n";
       }
 
       case "LRANGE": {
-        String k = parts[1]; int start = Integer.parseInt(parts[2]), stop = Integer.parseInt(parts[3]);
+        String k = parts[1];
+        int start = Integer.parseInt(parts[2]);
+        int stop  = Integer.parseInt(parts[3]);
         List<String> l = listStore.get(k);
         if (l == null) return "*0\r\n";
         synchronized (l) {
@@ -542,88 +607,107 @@ public class Main {
     }
   }
 
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+  private static String encodeEntries(List<StreamEntry> entries) {
+    StringBuilder sb = new StringBuilder("*" + entries.size() + "\r\n");
+    for (StreamEntry e : entries) {
+      sb.append("*2\r\n$").append(e.id.length()).append("\r\n").append(e.id).append("\r\n");
+      sb.append("*").append(e.fields.size() * 2).append("\r\n");
+      for (Map.Entry<String, String> f : e.fields.entrySet()) {
+        sb.append("$").append(f.getKey().length()).append("\r\n").append(f.getKey()).append("\r\n");
+        sb.append("$").append(f.getValue().length()).append("\r\n").append(f.getValue()).append("\r\n");
+      }
+    }
+    return sb.toString();
+  }
+
+  private static void propagate(String[] parts) {
+    StringBuilder sb = new StringBuilder("*" + parts.length + "\r\n");
+    for (String p : parts) sb.append("$").append(p.length()).append("\r\n").append(p).append("\r\n");
+    byte[] msg = sb.toString().getBytes();
+    masterOffset.addAndGet(msg.length);
+    for (ReplicaState rs : replicas) {
+      try { rs.out.write(msg); rs.out.flush(); } catch (IOException e) { replicas.remove(rs); }
+    }
+  }
+
+  private static void notifyWaiter(String key) {
+    LinkedList<Object> q = waiters.get(key);
+    if (q != null) synchronized (q) {
+      Object f = q.peek();
+      if (f != null) synchronized (f) { f.notify(); }
+    }
+  }
+
+  private static void notifyStreamWaiter(String key) {
+    LinkedList<Object> q = streamWaiters.get(key);
+    if (q != null) synchronized (q) {
+      for (Object w : q) synchronized (w) { w.notify(); }
+    }
+  }
+
+  private static String readLineRaw(InputStream in) throws IOException {
+    StringBuilder sb = new StringBuilder();
+    int c;
+    while ((c = in.read()) != -1) {
+      if (c == '\n') break;
+      if (c != '\r') sb.append((char) c);
+    }
+    if (c == -1 && sb.length() == 0) return null;
+    return sb.toString();
+  }
+
+  // ── RDB Loader ───────────────────────────────────────────────────────────
+
   private static void loadRdb(String path) {
     try (DataInputStream dis = new DataInputStream(new FileInputStream(path))) {
-      // Skip "REDIS" magic + 4-byte version
       byte[] magic = new byte[9];
-      dis.readFully(magic); // "REDIS0011" etc.
+      dis.readFully(magic); // skip "REDIS0011"
 
       while (true) {
         int op = dis.read();
-        if (op == -1 || op == 0xFF) break; // EOF marker
+        if (op == -1 || op == 0xFF) break; // EOF
 
-        if (op == 0xFA) {
-          // Auxiliary field — skip key and value strings
-          readRdbString(dis);
-          readRdbString(dis);
-          continue;
-        }
+        if (op == 0xFA) { readRdbString(dis); readRdbString(dis); continue; } // aux field
+        if (op == 0xFE) { readRdbLength(dis); continue; }                     // db selector
+        if (op == 0xFB) { readRdbLength(dis); readRdbLength(dis); continue; } // resize db
 
-        if (op == 0xFE) {
-          // DB selector — read db index (length-encoded)
-          readRdbLength(dis);
-          continue;
-        }
-
-        if (op == 0xFB) {
-          // Resize DB — two length-encoded ints (hash table sizes)
-          readRdbLength(dis);
-          readRdbLength(dis);
-          continue;
-        }
-
-        // op is either 0xFC (expire ms), 0xFD (expire sec), or value type byte
         long expireMs = -1;
         int valueType = op;
 
-        if (op == 0xFC) {
-          // Expire time in milliseconds (8 bytes little-endian)
-          expireMs = readLongLE(dis);
-          valueType = dis.read();
-        } else if (op == 0xFD) {
-          // Expire time in seconds (4 bytes little-endian)
-          expireMs = readIntLE(dis) * 1000L;
-          valueType = dis.read();
-        }
+        if (op == 0xFC) { expireMs = readLongLE(dis); valueType = dis.read(); }       // ms expiry
+        else if (op == 0xFD) { expireMs = readIntLE(dis) * 1000L; valueType = dis.read(); } // sec expiry
 
         if (valueType == 0) {
-          // String value
           String key = readRdbString(dis);
           String val = readRdbString(dis);
           store.put(key, val);
           if (expireMs > 0) expiry.put(key, expireMs);
         } else {
-          // Unsupported type — stop parsing
-          break;
+          break; // unsupported type
         }
       }
     } catch (FileNotFoundException ignored) {
-      // File doesn't exist — treat as empty DB
+      // No RDB file — start with empty DB
     } catch (Exception e) {
       System.out.println("RDB load error: " + e.getMessage());
     }
   }
 
-  // Read a length-encoded integer from RDB
   private static int readRdbLength(DataInputStream dis) throws IOException {
     int first = dis.read();
     int enc = (first & 0xC0) >> 6;
     if (enc == 0) return first & 0x3F;
     if (enc == 1) return ((first & 0x3F) << 8) | dis.read();
-    if (enc == 2) {
-      // Next 4 bytes big-endian
-      return ((dis.read() << 24) | (dis.read() << 16) | (dis.read() << 8) | dis.read());
-    }
-    // enc == 3: special encoding (integer stored as string)
-    return -(first & 0x3F); // return negative to signal special
+    if (enc == 2) return (dis.read() << 24) | (dis.read() << 16) | (dis.read() << 8) | dis.read();
+    return -(first & 0x3F); // special encoding
   }
 
-  // Read a length-encoded string from RDB
   private static String readRdbString(DataInputStream dis) throws IOException {
     int first = dis.read();
     int enc = (first & 0xC0) >> 6;
     if (enc == 3) {
-      // Special integer encoding
       int subtype = first & 0x3F;
       if (subtype == 0) return String.valueOf(dis.read());
       if (subtype == 1) return String.valueOf(dis.read() | (dis.read() << 8));
@@ -631,9 +715,9 @@ public class Main {
       return "";
     }
     int len;
-    if (enc == 0) len = first & 0x3F;
+    if (enc == 0)      len = first & 0x3F;
     else if (enc == 1) len = ((first & 0x3F) << 8) | dis.read();
-    else { len = ((dis.read() << 24) | (dis.read() << 16) | (dis.read() << 8) | dis.read()); }
+    else               len = (dis.read() << 24) | (dis.read() << 16) | (dis.read() << 8) | dis.read();
     byte[] bytes = new byte[len];
     dis.readFully(bytes);
     return new String(bytes);
@@ -649,48 +733,5 @@ public class Main {
     int v = 0;
     for (int i = 0; i < 4; i++) v |= (dis.read() & 0xFF) << (8 * i);
     return v;
-  }
-
-  private static String encodeEntries(List<StreamEntry> entries) {
-    StringBuilder sb = new StringBuilder("*" + entries.size() + "\r\n");
-    for (StreamEntry e : entries) {
-      sb.append("*2\r\n$").append(e.id.length()).append("\r\n").append(e.id).append("\r\n");
-      sb.append("*").append(e.fields.size() * 2).append("\r\n");
-      for (Map.Entry<String, String> f : e.fields.entrySet())
-        sb.append("$").append(f.getKey().length()).append("\r\n").append(f.getKey()).append("\r\n")
-          .append("$").append(f.getValue().length()).append("\r\n").append(f.getValue()).append("\r\n");
-    }
-    return sb.toString();
-  }
-
-  private static void propagate(String[] parts) {
-    StringBuilder sb = new StringBuilder("*" + parts.length + "\r\n");
-    for (String p : parts) sb.append("$").append(p.length()).append("\r\n").append(p).append("\r\n");
-    byte[] msg = sb.toString().getBytes();
-    masterOffset.addAndGet(msg.length); // track bytes propagated
-    for (ReplicaState rs : replicas) {
-      try { rs.out.write(msg); rs.out.flush(); } catch (IOException e) { replicas.remove(rs); }
-    }
-  }
-
-  private static void notifyWaiter(String key) {
-    LinkedList<Object> q = waiters.get(key);
-    if (q != null) synchronized (q) { Object f = q.peek(); if (f != null) synchronized (f) { f.notify(); } }
-  }
-
-  private static void notifyStreamWaiter(String key) {
-    LinkedList<Object> q = streamWaiters.get(key);
-    if (q != null) synchronized (q) { for (Object w : q) synchronized (w) { w.notify(); } }
-  }
-
-  private static String readLineRaw(InputStream in) throws IOException {
-    StringBuilder sb = new StringBuilder();
-    int c;
-    while ((c = in.read()) != -1) {
-      if (c == '\n') break;
-      if (c != '\r') sb.append((char) c);
-    }
-    if (c == -1 && sb.length() == 0) return null;
-    return sb.toString();
   }
 }
