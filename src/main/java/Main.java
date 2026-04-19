@@ -54,6 +54,11 @@ public class Main {
       if (args[i].equals("--dbfilename")) dbfilename = args[i + 1];
     }
 
+    // Load RDB file if it exists
+    if (!dir.isEmpty() && !dbfilename.isEmpty()) {
+      loadRdb(dir + "/" + dbfilename);
+    }
+
     try {
       ServerSocket serverSocket = new ServerSocket(port);
       serverSocket.setReuseAddress(true);
@@ -221,6 +226,14 @@ public class Main {
 
   private static String execCommand(String command, String[] parts, OutputStream out) throws InterruptedException, IOException {
     switch (command) {
+      case "KEYS": {
+        // Only support "*" pattern for now
+        List<String> keys = new ArrayList<>(store.keySet());
+        StringBuilder sb = new StringBuilder("*" + keys.size() + "\r\n");
+        for (String k : keys) sb.append("$").append(k.length()).append("\r\n").append(k).append("\r\n");
+        return sb.toString();
+      }
+
       case "CONFIG": {
         if (parts.length >= 3 && parts[1].toUpperCase().equals("GET")) {
           String param = parts[2].toLowerCase();
@@ -517,6 +530,115 @@ public class Main {
 
       default: return "-ERR unknown command\r\n";
     }
+  }
+
+  private static void loadRdb(String path) {
+    try (DataInputStream dis = new DataInputStream(new FileInputStream(path))) {
+      // Skip "REDIS" magic + 4-byte version
+      byte[] magic = new byte[9];
+      dis.readFully(magic); // "REDIS0011" etc.
+
+      while (true) {
+        int op = dis.read();
+        if (op == -1 || op == 0xFF) break; // EOF marker
+
+        if (op == 0xFA) {
+          // Auxiliary field — skip key and value strings
+          readRdbString(dis);
+          readRdbString(dis);
+          continue;
+        }
+
+        if (op == 0xFE) {
+          // DB selector — read db index (length-encoded)
+          readRdbLength(dis);
+          continue;
+        }
+
+        if (op == 0xFB) {
+          // Resize DB — two length-encoded ints (hash table sizes)
+          readRdbLength(dis);
+          readRdbLength(dis);
+          continue;
+        }
+
+        // op is either 0xFC (expire ms), 0xFD (expire sec), or value type byte
+        long expireMs = -1;
+        int valueType = op;
+
+        if (op == 0xFC) {
+          // Expire time in milliseconds (8 bytes little-endian)
+          expireMs = readLongLE(dis);
+          valueType = dis.read();
+        } else if (op == 0xFD) {
+          // Expire time in seconds (4 bytes little-endian)
+          expireMs = readIntLE(dis) * 1000L;
+          valueType = dis.read();
+        }
+
+        if (valueType == 0) {
+          // String value
+          String key = readRdbString(dis);
+          String val = readRdbString(dis);
+          store.put(key, val);
+          if (expireMs > 0) expiry.put(key, expireMs);
+        } else {
+          // Unsupported type — stop parsing
+          break;
+        }
+      }
+    } catch (FileNotFoundException ignored) {
+      // File doesn't exist — treat as empty DB
+    } catch (Exception e) {
+      System.out.println("RDB load error: " + e.getMessage());
+    }
+  }
+
+  // Read a length-encoded integer from RDB
+  private static int readRdbLength(DataInputStream dis) throws IOException {
+    int first = dis.read();
+    int enc = (first & 0xC0) >> 6;
+    if (enc == 0) return first & 0x3F;
+    if (enc == 1) return ((first & 0x3F) << 8) | dis.read();
+    if (enc == 2) {
+      // Next 4 bytes big-endian
+      return ((dis.read() << 24) | (dis.read() << 16) | (dis.read() << 8) | dis.read());
+    }
+    // enc == 3: special encoding (integer stored as string)
+    return -(first & 0x3F); // return negative to signal special
+  }
+
+  // Read a length-encoded string from RDB
+  private static String readRdbString(DataInputStream dis) throws IOException {
+    int first = dis.read();
+    int enc = (first & 0xC0) >> 6;
+    if (enc == 3) {
+      // Special integer encoding
+      int subtype = first & 0x3F;
+      if (subtype == 0) return String.valueOf(dis.read());
+      if (subtype == 1) return String.valueOf(dis.read() | (dis.read() << 8));
+      if (subtype == 2) return String.valueOf(readIntLE(dis));
+      return "";
+    }
+    int len;
+    if (enc == 0) len = first & 0x3F;
+    else if (enc == 1) len = ((first & 0x3F) << 8) | dis.read();
+    else { len = ((dis.read() << 24) | (dis.read() << 16) | (dis.read() << 8) | dis.read()); }
+    byte[] bytes = new byte[len];
+    dis.readFully(bytes);
+    return new String(bytes);
+  }
+
+  private static long readLongLE(DataInputStream dis) throws IOException {
+    long v = 0;
+    for (int i = 0; i < 8; i++) v |= ((long)(dis.read() & 0xFF)) << (8 * i);
+    return v;
+  }
+
+  private static int readIntLE(DataInputStream dis) throws IOException {
+    int v = 0;
+    for (int i = 0; i < 4; i++) v |= (dis.read() & 0xFF) << (8 * i);
+    return v;
   }
 
   private static String encodeEntries(List<StreamEntry> entries) {
