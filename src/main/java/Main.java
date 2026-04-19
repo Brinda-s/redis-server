@@ -155,6 +155,8 @@ public class Main {
       boolean inMulti = false;
       List<String[]> txQueue = new ArrayList<>();
       Set<String> subscribedChannels = new HashSet<>();
+      boolean inSubscribed = false;
+      boolean inSubscribed = false;
 
       String line;
       while ((line = in.readLine()) != null) {
@@ -201,11 +203,21 @@ public class Main {
           StringBuilder sb = new StringBuilder();
           for (int i = 1; i < parts.length; i++) {
             String ch = parts[i];
-            subscribedChannels.add(ch); // HashSet deduplicates
+            subscribedChannels.add(ch);
             sb.append("*3\r\n$9\r\nsubscribe\r\n$").append(ch.length()).append("\r\n").append(ch)
               .append("\r\n:").append(subscribedChannels.size()).append("\r\n");
           }
+          inSubscribed = true;
           out.write(sb.toString().getBytes());
+
+        } else if (inSubscribed) {
+          // In subscribed mode — only SUBSCRIBE/UNSUBSCRIBE/PING/QUIT allowed
+          String lower = command.toLowerCase();
+          if (lower.equals("unsubscribe") || lower.equals("psubscribe") || lower.equals("punsubscribe") || lower.equals("quit")) {
+            out.write("+OK\r\n".getBytes()); // stub for now
+          } else {
+            out.write(("-ERR Can't execute '" + lower + "': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context\r\n").getBytes());
+          }
 
         } else {
           String resp = execCommand(command, parts, out);
