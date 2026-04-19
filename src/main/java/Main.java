@@ -454,13 +454,15 @@ public class Main {
   }
 
   // Propagate a command to all connected replicas as a RESP array
-  // Read a \r\n terminated line from raw InputStream
+  // Read a \r\n terminated line from raw InputStream; returns null on EOF
   private static String readLineRaw(InputStream in) throws IOException {
     StringBuilder sb = new StringBuilder();
-    int c;
-    while ((c = in.read()) != -1) {
+    int c = in.read();
+    if (c == -1) return null;
+    while (c != -1) {
       if (c == '\r') { in.read(); break; } // consume \n
       sb.append((char) c);
+      c = in.read();
     }
     return sb.toString();
   }
