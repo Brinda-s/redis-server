@@ -277,6 +277,28 @@ public class Main {
       throws InterruptedException, IOException {
     switch (command) {
 
+      case "ZRANGE": {
+        String key = parts[1];
+        int start = Integer.parseInt(parts[2]);
+        int stop  = Integer.parseInt(parts[3]);
+        TreeMap<String, Double> zset = zsetStore.get(key);
+        if (zset == null) return "*0\r\n";
+        List<Map.Entry<String, Double>> entries = new ArrayList<>(zset.entrySet());
+        entries.sort((a, b) -> {
+          int cmp = Double.compare(a.getValue(), b.getValue());
+          return cmp != 0 ? cmp : a.getKey().compareTo(b.getKey());
+        });
+        int size = entries.size();
+        if (start >= size || start > stop) return "*0\r\n";
+        stop = Math.min(stop, size - 1);
+        StringBuilder sb = new StringBuilder("*" + (stop - start + 1) + "\r\n");
+        for (int i = start; i <= stop; i++) {
+          String m = entries.get(i).getKey();
+          sb.append("$").append(m.length()).append("\r\n").append(m).append("\r\n");
+        }
+        return sb.toString();
+      }
+
       case "ZRANK": {
         String key = parts[1]; String member = parts[2];
         TreeMap<String, Double> zset = zsetStore.get(key);
