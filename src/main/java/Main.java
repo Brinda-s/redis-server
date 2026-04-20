@@ -13,7 +13,7 @@ public class Main {
   static ConcurrentHashMap<String, LinkedList<Object>> waiters = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, List<StreamEntry>> streamStore = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, LinkedList<Object>> streamWaiters = new ConcurrentHashMap<>();
-  static String role = "master";
+  static ConcurrentHashMap<String, Set<OutputStream>> pubsubChannels = new ConcurrentHashMap<>();
   static String dir = "";
   static String dbfilename = "";
 
@@ -204,6 +204,8 @@ public class Main {
           for (int i = 1; i < parts.length; i++) {
             String ch = parts[i];
             subscribedChannels.add(ch);
+            // Register this client's output stream on the channel
+            pubsubChannels.computeIfAbsent(ch, k -> Collections.synchronizedSet(new HashSet<>())).add(out);
             sb.append("*3\r\n$9\r\nsubscribe\r\n$").append(ch.length()).append("\r\n").append(ch)
               .append("\r\n:").append(subscribedChannels.size()).append("\r\n");
           }
@@ -264,6 +266,13 @@ public class Main {
   private static String execCommand(String command, String[] parts, OutputStream out)
       throws InterruptedException, IOException {
     switch (command) {
+
+      case "PUBLISH": {
+        String ch = parts[1];
+        Set<OutputStream> subs = pubsubChannels.get(ch);
+        int count = (subs == null) ? 0 : subs.size();
+        return ":" + count + "\r\n";
+      }
 
       case "PING": return "+PONG\r\n";
 
