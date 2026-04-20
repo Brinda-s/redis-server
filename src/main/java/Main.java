@@ -277,6 +277,22 @@ public class Main {
       throws InterruptedException, IOException {
     switch (command) {
 
+      case "ZRANK": {
+        String key = parts[1]; String member = parts[2];
+        TreeMap<String, Double> zset = zsetStore.get(key);
+        if (zset == null || !zset.containsKey(member)) return "$-1\r\n";
+        // Sort by score, then lexicographically for equal scores
+        List<Map.Entry<String, Double>> entries = new ArrayList<>(zset.entrySet());
+        entries.sort((a, b) -> {
+          int cmp = Double.compare(a.getValue(), b.getValue());
+          return cmp != 0 ? cmp : a.getKey().compareTo(b.getKey());
+        });
+        for (int i = 0; i < entries.size(); i++) {
+          if (entries.get(i).getKey().equals(member)) return ":" + i + "\r\n";
+        }
+        return "$-1\r\n";
+      }
+
       case "ZADD": {
         String key = parts[1];
         // parts: ZADD key score member [score member ...]
