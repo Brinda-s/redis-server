@@ -240,8 +240,9 @@ public class Main {
         }
         out.flush();
       }
-    } catch (IOException | InterruptedException e) {
-      System.out.println("Exception: " + e.getMessage());
+    } catch (Throwable e) {
+      System.out.println("UNCAUGHT in handleClient: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+      e.printStackTrace(System.out);
     } finally {
       // Don't close replica sockets — they stay open for propagation
       if (!isReplica) {
