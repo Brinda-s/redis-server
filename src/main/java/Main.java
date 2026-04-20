@@ -61,7 +61,6 @@ public class Main {
       ServerSocket serverSocket = new ServerSocket(port);
       serverSocket.setReuseAddress(true);
 
-      // If replica mode, do handshake with master in background thread
       if (masterHost != null) {
         final String mHost = masterHost;
         final int mPort = masterPort;
@@ -74,23 +73,22 @@ public class Main {
             OutputStream masterOut = masterSocket.getOutputStream();
 
             masterOut.write("*1\r\n$4\r\nPING\r\n".getBytes()); masterOut.flush();
-            readLineRaw(masterRawIn); // +PONG
+            readLineRaw(masterRawIn);
 
             String portStr = String.valueOf(fPort);
             masterOut.write(("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$"
                 + portStr.length() + "\r\n" + portStr + "\r\n").getBytes());
             masterOut.flush();
-            readLineRaw(masterRawIn); // +OK
+            readLineRaw(masterRawIn);
 
             masterOut.write("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n".getBytes());
             masterOut.flush();
-            readLineRaw(masterRawIn); // +OK
+            readLineRaw(masterRawIn);
 
             masterOut.write("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n".getBytes());
             masterOut.flush();
-            readLineRaw(masterRawIn); // +FULLRESYNC
+            readLineRaw(masterRawIn);
 
-            // Skip RDB file
             String rdbHeader = readLineRaw(masterRawIn);
             int rdbLen = Integer.parseInt(rdbHeader.substring(1).trim());
             byte[] rdbBuf = new byte[rdbLen];
@@ -101,7 +99,6 @@ public class Main {
               totalRead += n;
             }
 
-            // Propagation loop — process commands from master silently
             long replicaOffset = 0;
             String line;
             while ((line = readLineRaw(masterRawIn)) != null) {
@@ -109,19 +106,17 @@ public class Main {
               int numArgs = Integer.parseInt(line.substring(1));
               String[] parts = new String[numArgs];
               for (int i = 0; i < numArgs; i++) {
-                readLineRaw(masterRawIn); // skip $len
+                readLineRaw(masterRawIn);
                 parts[i] = readLineRaw(masterRawIn);
               }
               if (parts[0] == null) continue;
 
-              // Calculate byte size of this command
               StringBuilder respCmd = new StringBuilder("*" + numArgs + "\r\n");
               for (String p : parts) respCmd.append("$").append(p.length()).append("\r\n").append(p).append("\r\n");
               int cmdBytes = respCmd.toString().getBytes().length;
 
               if (parts[0].toUpperCase().equals("REPLCONF") && parts.length > 1
                   && parts[1].toUpperCase().equals("GETACK")) {
-                // Respond with offset BEFORE counting this GETACK
                 String ackOffset = String.valueOf(replicaOffset);
                 masterOut.write(("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$"
                     + ackOffset.length() + "\r\n" + ackOffset + "\r\n").getBytes());
@@ -137,7 +132,6 @@ public class Main {
         }).start();
       }
 
-      // Accept client connections
       while (true) {
         Socket clientSocket = serverSocket.accept();
         new Thread(() -> handleClient(clientSocket)).start();
@@ -159,9 +153,7 @@ public class Main {
 
       String line;
       while ((line = in.readLine()) != null) {
-        System.out.println("[RECV] '" + line + "' inSub=" + inSubscribed);
-        System.out.flush();
-        // Handle inline commands (used by redis-cli in subscribed mode)
+        // Handle inline commands (e.g. plain PING in subscribed mode)
         if (!line.startsWith("*")) {
           if (inSubscribed && line.trim().toUpperCase().equals("PING")) {
             out.write("*2\r\n$4\r\npong\r\n$0\r\n\r\n".getBytes());
@@ -169,16 +161,11 @@ public class Main {
           }
           continue;
         }
+
         int numArgs = Integer.parseInt(line.substring(1));
-        System.out.println("[PARSE] numArgs=" + numArgs); System.out.flush();
         String[] parts = new String[numArgs];
-        for (int i = 0; i < numArgs; i++) {
-          String skip = in.readLine();
-          parts[i] = in.readLine();
-          System.out.println("[PARSE] skip='" + skip + "' part='" + parts[i] + "'"); System.out.flush();
-        }
+        for (int i = 0; i < numArgs; i++) { in.readLine(); parts[i] = in.readLine(); }
         String command = (parts[0] != null) ? parts[0].toUpperCase() : "NULL";
-        System.out.println("[CMD] '" + command + "' inSub=" + inSubscribed); System.out.flush();
 
         // Queue commands inside MULTI block
         if (inMulti && !command.equals("EXEC") && !command.equals("DISCARD")) {
@@ -213,7 +200,6 @@ public class Main {
           }
 
         } else if (command.equals("SUBSCRIBE")) {
-          // Per-client subscription tracking with deduplication
           StringBuilder sb = new StringBuilder();
           for (int i = 1; i < parts.length; i++) {
             String ch = parts[i];
@@ -225,18 +211,18 @@ public class Main {
           out.write(sb.toString().getBytes());
 
         } else if (inSubscribed) {
-          // In subscribed mode — only SUBSCRIBE/UNSUBSCRIBE/PING/QUIT allowed
-          String lower = command.toLowerCase();
-          if (lower.equals("unsubscribe") || lower.equals("psubscribe") || lower.equals("punsubscribe") || lower.equals("quit")) {
-            out.write("+OK\r\n".getBytes()); // stub for now
+          // ── SUBSCRIBED MODE ──────────────────────────────────
+          // PING has a special response in subscribed mode
+          if (command.equals("PING")) {
+            out.write("*2\r\n$4\r\npong\r\n$0\r\n\r\n".getBytes());
           } else {
+            String lower = command.toLowerCase();
             out.write(("-ERR Can't execute '" + lower + "': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context\r\n").getBytes());
           }
 
         } else {
           String resp = execCommand(command, parts, out);
           if (!resp.isEmpty()) out.write(resp.getBytes());
-          // After PSYNC, hand off this connection to the replica ACK reader
           if (command.equals("PSYNC")) {
             ReplicaState rs = new ReplicaState(out, clientSocket.getInputStream());
             replicas.add(rs);
@@ -249,10 +235,8 @@ public class Main {
         out.flush();
       }
     } catch (Throwable e) {
-      System.out.println("UNCAUGHT in handleClient: " + e.getClass().getSimpleName() + ": " + e.getMessage());
-      e.printStackTrace(System.out);
+      System.out.println("Exception in handleClient: " + e.getClass().getSimpleName() + ": " + e.getMessage());
     } finally {
-      // Don't close replica sockets — they stay open for propagation
       if (!isReplica) {
         try { clientSocket.close(); } catch (IOException ignored) {}
       }
@@ -345,19 +329,13 @@ public class Main {
       case "REPLCONF": return "+OK\r\n";
 
       case "WAIT": {
-        int needed  = Integer.parseInt(parts[1]);
+        int needed   = Integer.parseInt(parts[1]);
         long timeout = Long.parseLong(parts[2]);
-
-        // No writes yet — all replicas are already in sync
         if (masterOffset.get() == 0) return ":" + replicas.size() + "\r\n";
-
-        // Ask all replicas for their current offset
         byte[] getack = "*3\r\n$8\r\nREPLCONF\r\n$6\r\nGETACK\r\n$1\r\n*\r\n".getBytes();
         for (ReplicaState rs : replicas) {
           try { rs.out.write(getack); rs.out.flush(); } catch (IOException ignored) {}
         }
-
-        // Poll until enough ack or timeout
         long deadline = System.currentTimeMillis() + timeout;
         long target   = masterOffset.get();
         while (System.currentTimeMillis() < deadline) {
@@ -690,21 +668,21 @@ public class Main {
   private static void loadRdb(String path) {
     try (DataInputStream dis = new DataInputStream(new FileInputStream(path))) {
       byte[] magic = new byte[9];
-      dis.readFully(magic); // skip "REDIS0011"
+      dis.readFully(magic);
 
       while (true) {
         int op = dis.read();
-        if (op == -1 || op == 0xFF) break; // EOF
+        if (op == -1 || op == 0xFF) break;
 
-        if (op == 0xFA) { readRdbString(dis); readRdbString(dis); continue; } // aux field
-        if (op == 0xFE) { readRdbLength(dis); continue; }                     // db selector
-        if (op == 0xFB) { readRdbLength(dis); readRdbLength(dis); continue; } // resize db
+        if (op == 0xFA) { readRdbString(dis); readRdbString(dis); continue; }
+        if (op == 0xFE) { readRdbLength(dis); continue; }
+        if (op == 0xFB) { readRdbLength(dis); readRdbLength(dis); continue; }
 
         long expireMs = -1;
         int valueType = op;
 
-        if (op == 0xFC) { expireMs = readLongLE(dis); valueType = dis.read(); }       // ms expiry
-        else if (op == 0xFD) { expireMs = readIntLE(dis) * 1000L; valueType = dis.read(); } // sec expiry
+        if (op == 0xFC) { expireMs = readLongLE(dis); valueType = dis.read(); }
+        else if (op == 0xFD) { expireMs = readIntLE(dis) * 1000L; valueType = dis.read(); }
 
         if (valueType == 0) {
           String key = readRdbString(dis);
@@ -712,11 +690,10 @@ public class Main {
           store.put(key, val);
           if (expireMs > 0) expiry.put(key, expireMs);
         } else {
-          break; // unsupported type
+          break;
         }
       }
     } catch (FileNotFoundException ignored) {
-      // No RDB file — start with empty DB
     } catch (Exception e) {
       System.out.println("RDB load error: " + e.getMessage());
     }
@@ -728,7 +705,7 @@ public class Main {
     if (enc == 0) return first & 0x3F;
     if (enc == 1) return ((first & 0x3F) << 8) | dis.read();
     if (enc == 2) return (dis.read() << 24) | (dis.read() << 16) | (dis.read() << 8) | dis.read();
-    return -(first & 0x3F); // special encoding
+    return -(first & 0x3F);
   }
 
   private static String readRdbString(DataInputStream dis) throws IOException {
