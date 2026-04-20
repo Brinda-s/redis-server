@@ -200,24 +200,32 @@ public class Main {
             out.write("+OK\r\n".getBytes());
           }
 
-        } else if (command.equals("SUBSCRIBE")) {
+        } else if (command.equals("SUBSCRIBE") || command.equals("UNSUBSCRIBE")) {
           StringBuilder sb = new StringBuilder();
           for (int i = 1; i < parts.length; i++) {
             String ch = parts[i];
-            subscribedChannels.add(ch);
-            // Register this client's output stream on the channel
-            pubsubChannels.computeIfAbsent(ch, k -> Collections.synchronizedSet(new HashSet<>())).add(out);
-            sb.append("*3\r\n$9\r\nsubscribe\r\n$").append(ch.length()).append("\r\n").append(ch)
-              .append("\r\n:").append(subscribedChannels.size()).append("\r\n");
+            if (command.equals("SUBSCRIBE")) {
+              subscribedChannels.add(ch);
+              pubsubChannels.computeIfAbsent(ch, k -> Collections.synchronizedSet(new HashSet<>())).add(out);
+              sb.append("*3\r\n$9\r\nsubscribe\r\n$").append(ch.length()).append("\r\n").append(ch)
+                .append("\r\n:").append(subscribedChannels.size()).append("\r\n");
+            } else {
+              subscribedChannels.remove(ch);
+              Set<OutputStream> subs = pubsubChannels.get(ch);
+              if (subs != null) subs.remove(out);
+              sb.append("*3\r\n$11\r\nunsubscribe\r\n$").append(ch.length()).append("\r\n").append(ch)
+                .append("\r\n:").append(subscribedChannels.size()).append("\r\n");
+            }
           }
-          inSubscribed = true;
+          inSubscribed = !subscribedChannels.isEmpty();
           out.write(sb.toString().getBytes());
 
         } else if (inSubscribed) {
-          // ── SUBSCRIBED MODE ──────────────────────────────────
-          // PING has a special response in subscribed mode
           if (command.equals("PING")) {
             out.write("*2\r\n$4\r\npong\r\n$0\r\n\r\n".getBytes());
+          } else if (command.equals("UNSUBSCRIBE")) {
+            // handled above in the SUBSCRIBE/UNSUBSCRIBE branch — shouldn't reach here
+            // but guard just in case
           } else {
             String lower = command.toLowerCase();
             out.write(("-ERR Can't execute '" + lower + "': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context\r\n").getBytes());
