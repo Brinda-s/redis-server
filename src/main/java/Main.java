@@ -170,9 +170,15 @@ public class Main {
           continue;
         }
         int numArgs = Integer.parseInt(line.substring(1));
+        System.out.println("[PARSE] numArgs=" + numArgs); System.out.flush();
         String[] parts = new String[numArgs];
-        for (int i = 0; i < numArgs; i++) { in.readLine(); parts[i] = in.readLine(); }
-        String command = parts[0].toUpperCase();
+        for (int i = 0; i < numArgs; i++) {
+          String skip = in.readLine();
+          parts[i] = in.readLine();
+          System.out.println("[PARSE] skip='" + skip + "' part='" + parts[i] + "'"); System.out.flush();
+        }
+        String command = (parts[0] != null) ? parts[0].toUpperCase() : "NULL";
+        System.out.println("[CMD] '" + command + "' inSub=" + inSubscribed); System.out.flush();
 
         // Queue commands inside MULTI block
         if (inMulti && !command.equals("EXEC") && !command.equals("DISCARD")) {
