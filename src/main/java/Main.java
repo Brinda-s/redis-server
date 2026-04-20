@@ -13,8 +13,7 @@ public class Main {
   static ConcurrentHashMap<String, LinkedList<Object>> waiters = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, List<StreamEntry>> streamStore = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, LinkedList<Object>> streamWaiters = new ConcurrentHashMap<>();
-  // Sorted set store: key → TreeMap<score, set of members>
-  // Using ConcurrentHashMap of TreeMaps (member→score for fast lookup)
+  static ConcurrentHashMap<String, Set<OutputStream>> pubsubChannels = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, TreeMap<String, Double>> zsetStore = new ConcurrentHashMap<>();
   static String role = "master";
   static String dir = "";
