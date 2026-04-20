@@ -13,7 +13,9 @@ public class Main {
   static ConcurrentHashMap<String, LinkedList<Object>> waiters = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, List<StreamEntry>> streamStore = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, LinkedList<Object>> streamWaiters = new ConcurrentHashMap<>();
-  static ConcurrentHashMap<String, Set<OutputStream>> pubsubChannels = new ConcurrentHashMap<>();
+  // Sorted set store: key → TreeMap<score, set of members>
+  // Using ConcurrentHashMap of TreeMaps (member→score for fast lookup)
+  static ConcurrentHashMap<String, TreeMap<String, Double>> zsetStore = new ConcurrentHashMap<>();
   static String role = "master";
   static String dir = "";
   static String dbfilename = "";
@@ -275,6 +277,21 @@ public class Main {
   private static String execCommand(String command, String[] parts, OutputStream out)
       throws InterruptedException, IOException {
     switch (command) {
+
+      case "ZADD": {
+        String key = parts[1];
+        // parts: ZADD key score member [score member ...]
+        zsetStore.putIfAbsent(key, new TreeMap<>());
+        TreeMap<String, Double> zset = zsetStore.get(key);
+        int added = 0;
+        for (int i = 2; i + 1 < parts.length; i += 2) {
+          double score = Double.parseDouble(parts[i]);
+          String member = parts[i + 1];
+          if (!zset.containsKey(member)) added++;
+          zset.put(member, score);
+        }
+        return ":" + added + "\r\n";
+      }
 
       case "PUBLISH": {
         String ch  = parts[1];
