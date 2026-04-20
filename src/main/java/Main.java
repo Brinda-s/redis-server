@@ -159,7 +159,14 @@ public class Main {
 
       String line;
       while ((line = in.readLine()) != null) {
-        if (!line.startsWith("*")) continue;
+        // Handle inline commands (used by redis-cli in subscribed mode)
+        if (!line.startsWith("*")) {
+          if (inSubscribed && line.trim().toUpperCase().equals("PING")) {
+            out.write("*2\r\n$4\r\npong\r\n$0\r\n\r\n".getBytes());
+            out.flush();
+          }
+          continue;
+        }
         int numArgs = Integer.parseInt(line.substring(1));
         String[] parts = new String[numArgs];
         for (int i = 0; i < numArgs; i++) { in.readLine(); parts[i] = in.readLine(); }
