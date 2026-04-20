@@ -159,6 +159,8 @@ public class Main {
 
       String line;
       while ((line = in.readLine()) != null) {
+        System.out.println("[RECV] '" + line + "' inSub=" + inSubscribed);
+        System.out.flush();
         // Handle inline commands (used by redis-cli in subscribed mode)
         if (!line.startsWith("*")) {
           if (inSubscribed && line.trim().toUpperCase().equals("PING")) {
