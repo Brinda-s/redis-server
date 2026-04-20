@@ -269,9 +269,20 @@ public class Main {
     switch (command) {
 
       case "PUBLISH": {
-        String ch = parts[1];
+        String ch  = parts[1];
+        String msg = parts[2];
+        String payload = "*3\r\n$7\r\nmessage\r\n$" + ch.length() + "\r\n" + ch + "\r\n$"
+                       + msg.length() + "\r\n" + msg + "\r\n";
         Set<OutputStream> subs = pubsubChannels.get(ch);
-        int count = (subs == null) ? 0 : subs.size();
+        int count = 0;
+        if (subs != null) {
+          synchronized (subs) {
+            for (OutputStream sub : subs) {
+              try { sub.write(payload.getBytes()); sub.flush(); count++; }
+              catch (IOException ignored) {}
+            }
+          }
+        }
         return ":" + count + "\r\n";
       }
 
