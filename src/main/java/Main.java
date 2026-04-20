@@ -14,6 +14,7 @@ public class Main {
   static ConcurrentHashMap<String, List<StreamEntry>> streamStore = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, LinkedList<Object>> streamWaiters = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, Set<OutputStream>> pubsubChannels = new ConcurrentHashMap<>();
+  static String role = "master";
   static String dir = "";
   static String dbfilename = "";
 
