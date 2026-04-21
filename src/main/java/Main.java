@@ -756,17 +756,14 @@ public class Main {
 
   // Compute Redis geohash score: interleave 26 bits of lon and lat
   private static double geoScore(double lon, double lat) {
-    // Normalize to [0, 1]
     double normLon = (lon + 180.0) / 360.0;
     double normLat = (lat + 85.05112878) / 170.10225756;
-    // Encode to 26-bit integers
-    long lonBits = (long)(normLon * (1L << 26));
-    long latBits = (long)(normLat * (1L << 26));
-    // Interleave: even bits = lon, odd bits = lat
+    long lonBits = Math.min((1L << 26) - 1, (long)Math.floor(normLon * (1L << 26)));
+    long latBits = Math.min((1L << 26) - 1, (long)Math.floor(normLat * (1L << 26)));
     long score = 0;
     for (int i = 0; i < 26; i++) {
-      score |= ((lonBits >> i) & 1L) << (2 * i);
-      score |= ((latBits >> i) & 1L) << (2 * i + 1);
+      score |= ((latBits >> i) & 1L) << (2 * i);
+      score |= ((lonBits >> i) & 1L) << (2 * i + 1);
     }
     return (double) score;
   }
