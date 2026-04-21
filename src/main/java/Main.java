@@ -277,6 +277,13 @@ public class Main {
       throws InterruptedException, IOException {
     switch (command) {
 
+      case "ZREM": {
+        TreeMap<String, Double> zset = zsetStore.get(parts[1]);
+        if (zset == null || !zset.containsKey(parts[2])) return ":0\r\n";
+        zset.remove(parts[2]);
+        return ":1\r\n";
+      }
+
       case "ZSCORE": {
         TreeMap<String, Double> zset = zsetStore.get(parts[1]);
         if (zset == null || !zset.containsKey(parts[2])) return "$-1\r\n";
