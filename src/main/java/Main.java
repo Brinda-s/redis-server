@@ -285,7 +285,12 @@ public class Main {
           if (zset == null || !zset.containsKey(parts[i])) {
             sb.append("*-1\r\n");
           } else {
-            sb.append("*2\r\n$1\r\n0\r\n$1\r\n0\r\n");
+            long score = (long) zset.get(parts[i]).doubleValue();
+            double[] coords = geoDecodeScore(score);
+            String lonStr = String.valueOf(coords[0]);
+            String latStr = String.valueOf(coords[1]);
+            sb.append("*2\r\n$").append(lonStr.length()).append("\r\n").append(lonStr).append("\r\n");
+            sb.append("$").append(latStr.length()).append("\r\n").append(latStr).append("\r\n");
           }
         }
         return sb.toString();
@@ -755,6 +760,18 @@ public class Main {
   // ── Helpers ──────────────────────────────────────────────────────────────
 
   // Compute Redis geohash score: interleave 26 bits of lon and lat
+  // Decode a geohash score back to [longitude, latitude]
+  private static double[] geoDecodeScore(long score) {
+    long lonBits = 0, latBits = 0;
+    for (int i = 0; i < 26; i++) {
+      latBits |= ((score >> (2 * i))     & 1L) << i; // even bits → lat
+      lonBits |= ((score >> (2 * i + 1)) & 1L) << i; // odd bits  → lon
+    }
+    double lon = (lonBits / (double)(1L << 26)) * 360.0 - 180.0;
+    double lat = (latBits / (double)(1L << 26)) * 170.10225756 - 85.05112878;
+    return new double[]{lon, lat};
+  }
+
   private static double geoScore(double lon, double lat) {
     double normLon = (lon + 180.0) / 360.0;
     double normLat = (lat + 85.05112878) / 170.10225756;
