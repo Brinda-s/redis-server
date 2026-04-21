@@ -789,8 +789,8 @@ public class Main {
       latBits |= ((score >> (2 * i))     & 1L) << i; // even bits → lat
       lonBits |= ((score >> (2 * i + 1)) & 1L) << i; // odd bits  → lon
     }
-    double lon = (lonBits / (double)(1L << 26)) * 360.0 - 180.0;
-    double lat = (latBits / (double)(1L << 26)) * 170.10225756 - 85.05112878;
+    double lon = ((lonBits + 0.5) / (double)(1L << 26)) * 360.0 - 180.0;
+    double lat = ((latBits + 0.5) / (double)(1L << 26)) * 170.10225756 - 85.05112878;
     return new double[]{lon, lat};
   }
 
