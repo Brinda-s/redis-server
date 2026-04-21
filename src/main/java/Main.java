@@ -277,6 +277,18 @@ public class Main {
       throws InterruptedException, IOException {
     switch (command) {
 
+      case "GEODIST": {
+        String key = parts[1];
+        TreeMap<String, Double> zset = zsetStore.get(key);
+        if (zset == null || !zset.containsKey(parts[2]) || !zset.containsKey(parts[3]))
+          return "$-1\r\n";
+        double[] c1 = geoDecodeScore((long) zset.get(parts[2]).doubleValue());
+        double[] c2 = geoDecodeScore((long) zset.get(parts[3]).doubleValue());
+        double dist = haversine(c1[0], c1[1], c2[0], c2[1]);
+        String distStr = String.format("%.4f", dist);
+        return "$" + distStr.length() + "\r\n" + distStr + "\r\n";
+      }
+
       case "GEOPOS": {
         String key = parts[1];
         TreeMap<String, Double> zset = zsetStore.get(key);
@@ -761,6 +773,16 @@ public class Main {
 
   // Compute Redis geohash score: interleave 26 bits of lon and lat
   // Decode a geohash score back to [longitude, latitude]
+  private static double haversine(double lon1, double lat1, double lon2, double lat2) {
+    final double R = 6372797.560856; // Earth radius in meters (Redis value)
+    double dLat = Math.toRadians(lat2 - lat1);
+    double dLon = Math.toRadians(lon2 - lon1);
+    double a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+             + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
+             * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
   private static double[] geoDecodeScore(long score) {
     long lonBits = 0, latBits = 0;
     for (int i = 0; i < 26; i++) {
