@@ -277,7 +277,20 @@ public class Main {
       throws InterruptedException, IOException {
     switch (command) {
 
-      case "GEOADD": return ":1\r\n";
+      case "GEOADD": {
+        // parts: GEOADD key lon lat member [lon lat member ...]
+        int added = 0;
+        for (int i = 2; i + 2 < parts.length; i += 3) {
+          double lon = Double.parseDouble(parts[i]);
+          double lat = Double.parseDouble(parts[i + 1]);
+          if (lon < -180 || lon > 180)
+            return "-ERR invalid longitude value " + lon + "\r\n";
+          if (lat < -85.05112878 || lat > 85.05112878)
+            return "-ERR invalid latitude value " + lat + "\r\n";
+          added++;
+        }
+        return ":" + added + "\r\n";
+      }
 
       case "ZREM": {
         TreeMap<String, Double> zset = zsetStore.get(parts[1]);
