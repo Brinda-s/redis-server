@@ -277,6 +277,11 @@ public class Main {
       throws InterruptedException, IOException {
     switch (command) {
 
+      case "ZCARD": {
+        TreeMap<String, Double> zset = zsetStore.get(parts[1]);
+        return ":" + (zset == null ? 0 : zset.size()) + "\r\n";
+      }
+
       case "ZRANGE": {
         String key = parts[1];
         int start = Integer.parseInt(parts[2]);
