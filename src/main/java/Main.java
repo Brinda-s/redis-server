@@ -278,16 +278,19 @@ public class Main {
     switch (command) {
 
       case "GEOADD": {
-        // parts: GEOADD key lon lat member [lon lat member ...]
+        String key = parts[1];
         int added = 0;
         for (int i = 2; i + 2 < parts.length; i += 3) {
           double lon = Double.parseDouble(parts[i]);
           double lat = Double.parseDouble(parts[i + 1]);
+          String member = parts[i + 2];
           if (lon < -180 || lon > 180)
             return "-ERR invalid longitude value " + lon + "\r\n";
           if (lat < -85.05112878 || lat > 85.05112878)
             return "-ERR invalid latitude value " + lat + "\r\n";
-          added++;
+          TreeMap<String, Double> zset = zsetStore.computeIfAbsent(key, k -> new TreeMap<>());
+          if (!zset.containsKey(member)) added++;
+          zset.put(member, 0.0); // score hardcoded to 0 for now
         }
         return ":" + added + "\r\n";
       }
