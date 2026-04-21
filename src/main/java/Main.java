@@ -277,6 +277,35 @@ public class Main {
       throws InterruptedException, IOException {
     switch (command) {
 
+      case "GEOSEARCH": {
+        // GEOSEARCH key FROMLONLAT lon lat BYRADIUS radius unit
+        String key = parts[1];
+        double centerLon = Double.parseDouble(parts[3]);
+        double centerLat = Double.parseDouble(parts[4]);
+        double radius    = Double.parseDouble(parts[6]);
+        String unit      = parts[7].toLowerCase();
+        // Convert radius to meters
+        double radiusM;
+        switch (unit) {
+          case "km": radiusM = radius * 1000; break;
+          case "mi": radiusM = radius * 1609.344; break;
+          case "ft": radiusM = radius * 0.3048; break;
+          default:   radiusM = radius; break; // "m"
+        }
+        TreeMap<String, Double> zset = zsetStore.get(key);
+        List<String> matches = new ArrayList<>();
+        if (zset != null) {
+          for (Map.Entry<String, Double> e : zset.entrySet()) {
+            double[] coords = geoDecodeScore((long) e.getValue().doubleValue());
+            double dist = haversine(centerLon, centerLat, coords[0], coords[1]);
+            if (dist <= radiusM) matches.add(e.getKey());
+          }
+        }
+        StringBuilder sb = new StringBuilder("*" + matches.size() + "\r\n");
+        for (String m : matches) sb.append("$").append(m.length()).append("\r\n").append(m).append("\r\n");
+        return sb.toString();
+      }
+
       case "GEODIST": {
         String key = parts[1];
         TreeMap<String, Double> zset = zsetStore.get(key);
