@@ -794,6 +794,12 @@ public class Main {
         }
       }
 
+      case "ACL": {
+        if (parts.length >= 2 && parts[1].toUpperCase().equals("WHOAMI"))
+          return "$7\r\ndefault\r\n";
+        return "-ERR unknown ACL command\r\n";
+      }
+
       default: return "-ERR unknown command\r\n";
     }
   }
@@ -960,11 +966,6 @@ public class Main {
     for (int i = 0; i < 4; i++) v |= (dis.read() & 0xFF) << (8 * i);
     return v;
   }
-  
-  case "ACL": {
-    if (parts.length >= 2 && parts[1].toUpperCase().equals("WHOAMI"))
-      return "$7\r\ndefault\r\n";
-    return "-ERR unknown ACL command\r\n";
-  }
+
   
 }
