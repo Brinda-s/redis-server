@@ -277,6 +277,15 @@ public class Main {
       throws InterruptedException, IOException {
     switch (command) {
 
+      case "ZSCORE": {
+        TreeMap<String, Double> zset = zsetStore.get(parts[1]);
+        if (zset == null || !zset.containsKey(parts[2])) return "$-1\r\n";
+        String score = String.valueOf(zset.get(parts[2]));
+        // Strip trailing .0 for integer-valued doubles (e.g. 20.0 → "20")
+        if (score.endsWith(".0")) score = score.substring(0, score.length() - 2);
+        return "$" + score.length() + "\r\n" + score + "\r\n";
+      }
+
       case "ZCARD": {
         TreeMap<String, Double> zset = zsetStore.get(parts[1]);
         return ":" + (zset == null ? 0 : zset.size()) + "\r\n";
