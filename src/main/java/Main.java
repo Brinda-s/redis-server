@@ -277,6 +277,8 @@ public class Main {
       throws InterruptedException, IOException {
     switch (command) {
 
+      case "GEOADD": return ":1\r\n";
+
       case "ZREM": {
         TreeMap<String, Double> zset = zsetStore.get(parts[1]);
         if (zset == null || !zset.containsKey(parts[2])) return ":0\r\n";
