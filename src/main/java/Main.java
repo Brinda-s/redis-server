@@ -277,6 +277,20 @@ public class Main {
       throws InterruptedException, IOException {
     switch (command) {
 
+      case "GEOPOS": {
+        String key = parts[1];
+        TreeMap<String, Double> zset = zsetStore.get(key);
+        StringBuilder sb = new StringBuilder("*" + (parts.length - 2) + "\r\n");
+        for (int i = 2; i < parts.length; i++) {
+          if (zset == null || !zset.containsKey(parts[i])) {
+            sb.append("*-1\r\n");
+          } else {
+            sb.append("*2\r\n$1\r\n0\r\n$1\r\n0\r\n");
+          }
+        }
+        return sb.toString();
+      }
+
       case "GEOADD": {
         String key = parts[1];
         int added = 0;
