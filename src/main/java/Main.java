@@ -290,7 +290,7 @@ public class Main {
             return "-ERR invalid latitude value " + lat + "\r\n";
           TreeMap<String, Double> zset = zsetStore.computeIfAbsent(key, k -> new TreeMap<>());
           if (!zset.containsKey(member)) added++;
-          zset.put(member, 0.0); // score hardcoded to 0 for now
+          zset.put(member, geoScore(lon, lat));
         }
         return ":" + added + "\r\n";
       }
@@ -305,9 +305,12 @@ public class Main {
       case "ZSCORE": {
         TreeMap<String, Double> zset = zsetStore.get(parts[1]);
         if (zset == null || !zset.containsKey(parts[2])) return "$-1\r\n";
-        String score = String.valueOf(zset.get(parts[2]));
-        // Strip trailing .0 for integer-valued doubles (e.g. 20.0 → "20")
-        if (score.endsWith(".0")) score = score.substring(0, score.length() - 2);
+        double scoreVal = zset.get(parts[2]);
+        String score;
+        if (scoreVal == Math.floor(scoreVal) && !Double.isInfinite(scoreVal))
+          score = String.valueOf((long) scoreVal);
+        else
+          score = String.valueOf(scoreVal);
         return "$" + score.length() + "\r\n" + score + "\r\n";
       }
 
@@ -736,6 +739,23 @@ public class Main {
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────
+
+  // Compute Redis geohash score: interleave 26 bits of lon and lat
+  private static double geoScore(double lon, double lat) {
+    // Normalize to [0, 1]
+    double normLon = (lon + 180.0) / 360.0;
+    double normLat = (lat + 85.05112878) / 170.10225756;
+    // Encode to 26-bit integers
+    long lonBits = (long)(normLon * (1L << 26));
+    long latBits = (long)(normLat * (1L << 26));
+    // Interleave: even bits = lon, odd bits = lat
+    long score = 0;
+    for (int i = 0; i < 26; i++) {
+      score |= ((lonBits >> i) & 1L) << (2 * i);
+      score |= ((latBits >> i) & 1L) << (2 * i + 1);
+    }
+    return (double) score;
+  }
 
   private static String encodeEntries(List<StreamEntry> entries) {
     StringBuilder sb = new StringBuilder("*" + entries.size() + "\r\n");
