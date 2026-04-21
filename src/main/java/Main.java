@@ -289,7 +289,8 @@ public class Main {
           return cmp != 0 ? cmp : a.getKey().compareTo(b.getKey());
         });
         int size = entries.size();
-        if (start >= size || start > stop) return "*0\r\n";
+        if (start < 0) start = Math.max(0, size + start);
+        if (stop  < 0) stop  = size + stop;
         stop = Math.min(stop, size - 1);
         StringBuilder sb = new StringBuilder("*" + (stop - start + 1) + "\r\n");
         for (int i = start; i <= stop; i++) {
