@@ -155,6 +155,8 @@ public class Main {
       List<String[]> txQueue = new ArrayList<>();
       Set<String> subscribedChannels = new HashSet<>();
       boolean inSubscribed = false;
+      boolean inSubscribed = false;
+      boolean authenticated = defaultUserNopass; // ADD THIS LINE
 
       String line;
       while ((line = in.readLine()) != null) {
@@ -236,6 +238,23 @@ public class Main {
           }
 
         } else {
+        } else {
+          if (defaultUserNopass) authenticated = true;
+          boolean isAuthExempt = command.equals("AUTH")
+              || (command.equals("ACL") && parts.length >= 2
+                  && parts[1].toUpperCase().equals("SETUSER"));
+          if (!authenticated && !isAuthExempt) {
+            out.write("-NOAUTH Authentication required.\r\n".getBytes());
+            out.flush();
+            continue;
+          }
+          if (command.equals("AUTH")) {
+            String resp = execCommand(command, parts, out);
+            if (resp.equals("+OK\r\n")) authenticated = true;
+            out.write(resp.getBytes());
+            out.flush();
+            continue;
+          }
           String resp = execCommand(command, parts, out);
           if (!resp.isEmpty()) out.write(resp.getBytes());
           if (command.equals("PSYNC")) {
