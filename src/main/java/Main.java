@@ -28,6 +28,9 @@ public class Main {
   static CopyOnWriteArrayList<ReplicaState> replicas = new CopyOnWriteArrayList<>();
   static AtomicLong masterOffset = new AtomicLong(0);
 
+  static boolean defaultUserNopass = true;
+  static List<String> defaultUserPasswords = new ArrayList<>();
+
   static class StreamEntry {
     String id;
     LinkedHashMap<String, String> fields = new LinkedHashMap<>();
@@ -798,13 +801,43 @@ public class Main {
         if (parts.length >= 2) {
           String sub = parts[1].toUpperCase();
           if (sub.equals("WHOAMI")) return "$7\r\ndefault\r\n";
-          if (sub.equals("GETUSER") && parts.length >= 3 && parts[2].equals("default"))
-            return "*4\r\n$5\r\nflags\r\n*1\r\n$6\r\nnopass\r\n$9\r\npasswords\r\n*0\r\n";
+          if (sub.equals("GETUSER") && parts.length >= 3 && parts[2].equals("default")) {
+            // flags
+            StringBuilder sb = new StringBuilder("*4\r\n$5\r\nflags\r\n");
+            if (defaultUserNopass) {
+              sb.append("*1\r\n$6\r\nnopass\r\n");
+            } else {
+              sb.append("*0\r\n");
+            }
+            // passwords
+            sb.append("$9\r\npasswords\r\n*").append(defaultUserPasswords.size()).append("\r\n");
+            for (String h : defaultUserPasswords)
+              sb.append("$").append(h.length()).append("\r\n").append(h).append("\r\n");
+            return sb.toString();
+          }
+          if (sub.equals("SETUSER") && parts.length >= 4 && parts[2].equals("default")) {
+            for (int i = 3; i < parts.length; i++) {
+              String rule = parts[i];
+              if (rule.startsWith(">")) {
+                String password = rule.substring(1);
+                try {
+                  java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+                  byte[] hash = md.digest(password.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                  StringBuilder hex = new StringBuilder();
+                  for (byte b : hash) hex.append(String.format("%02x", b));
+                  String hashStr = hex.toString();
+                  if (!defaultUserPasswords.contains(hashStr)) defaultUserPasswords.add(hashStr);
+                  defaultUserNopass = false;
+                } catch (Exception e) {
+                  return "-ERR hash error\r\n";
+                }
+              }
+            }
+            return "+OK\r\n";
+          }
         }
         return "-ERR unknown ACL command\r\n";
       }
-
-      default: return "-ERR unknown command\r\n";
     }
   }
 
