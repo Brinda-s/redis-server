@@ -600,7 +600,16 @@ public class Main {
       case "CONFIG": {
         if (parts.length >= 3 && parts[1].toUpperCase().equals("GET")) {
           String param = parts[2].toLowerCase();
-          String value = param.equals("dir") ? dir : param.equals("dbfilename") ? dbfilename : "";
+          String value;
+          switch (param) {
+            case "dir":            value = dir; break;
+            case "dbfilename":     value = dbfilename; break;
+            case "appendonly":     value = "no"; break;
+            case "appenddirname":  value = "appendonlydir"; break;
+            case "appendfilename": value = "appendonly.aof"; break;
+            case "appendfsync":    value = "everysec"; break;
+            default:               value = ""; break;
+          }
           return "*2\r\n$" + param.length() + "\r\n" + param + "\r\n$"
               + value.length() + "\r\n" + value + "\r\n";
         }
