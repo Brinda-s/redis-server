@@ -1071,19 +1071,20 @@ public class Main {
     return sb.toString();
   }
 
-  private static void replayAof(String path) {   // ADD HERE
-    try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(path)))) {
+  private static void replayAof(String path) {
+    try (InputStream in = new FileInputStream(path)) {
       String line;
-      while ((line = reader.readLine()) != null) {
+      while ((line = readLineRaw(in)) != null) {
         if (!line.startsWith("*")) continue;
         int numArgs = Integer.parseInt(line.substring(1));
         String[] parts = new String[numArgs];
         for (int i = 0; i < numArgs; i++) {
-          reader.readLine();
-          parts[i] = reader.readLine();
+          readLineRaw(in);          // skip $len line
+          parts[i] = readLineRaw(in);
         }
-        if (parts[0] == null) continue;
-        try { execCommand(parts[0].toUpperCase(), parts, null); } catch (Exception ignored) {}
+        if (parts[0] != null) {
+          try { execCommand(parts[0].toUpperCase(), parts, null); } catch (Exception ignored) {}
+        }
       }
     } catch (Exception e) {
       System.out.println("AOF replay error: " + e.getMessage());
