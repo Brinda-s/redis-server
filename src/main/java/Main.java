@@ -4,6 +4,7 @@ import java.net.Socket;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class Main {
@@ -15,6 +16,7 @@ public class Main {
   static ConcurrentHashMap<String, LinkedList<Object>> streamWaiters = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, Set<OutputStream>> pubsubChannels = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, TreeMap<String, Double>> zsetStore = new ConcurrentHashMap<>();
+  static ConcurrentHashMap<String, Set<AtomicBoolean>> keyDirtyFlags = new ConcurrentHashMap<>();
   static String role = "master";
   static String dir = "";
   static String dbfilename = "";
@@ -148,6 +150,7 @@ public class Main {
 
   private static void handleClient(Socket clientSocket) {
     boolean isReplica = false;
+    AtomicBoolean watchDirty = new AtomicBoolean(false);
     try {
       BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
       OutputStream out = clientSocket.getOutputStream();
@@ -186,15 +189,27 @@ public class Main {
           inMulti = true;
           out.write("+OK\r\n".getBytes());
 
-        } else if (command.equals("EXEC")) {
+        }  else if (command.equals("EXEC")) {
           if (!inMulti) {
             out.write("-ERR EXEC without MULTI\r\n".getBytes());
           } else {
             inMulti = false;
-            StringBuilder sb = new StringBuilder("*" + txQueue.size() + "\r\n");
-            for (String[] cmd : txQueue) sb.append(execCommand(cmd[0].toUpperCase(), cmd, out));
-            txQueue.clear();
-            out.write(sb.toString().getBytes());
+            if (watchDirty.get()) {
+              txQueue.clear();
+              out.write("*-1\r\n".getBytes());
+            } else {
+              StringBuilder sb = new StringBuilder("*" + txQueue.size() + "\r\n");
+              for (String[] cmd : txQueue) sb.append(execCommand(cmd[0].toUpperCase(), cmd, out));
+              txQueue.clear();
+              out.write(sb.toString().getBytes());
+            }
+            // clear watch state
+            for (String k : watchedKeys) {
+              Set<AtomicBoolean> flags = keyDirtyFlags.get(k);
+              if (flags != null) flags.remove(watchDirty);
+            }
+            watchedKeys.clear();
+            watchDirty.set(false);
           }
 
         } else if (command.equals("DISCARD")) {
@@ -236,11 +251,15 @@ public class Main {
             String lower = command.toLowerCase();
             out.write(("-ERR Can't execute '" + lower + "': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context\r\n").getBytes());
           }
-        } else if (command.equals("WATCH")) {
+        }  else if (command.equals("WATCH")) {
           if (inMulti) {
             out.write("-ERR WATCH inside MULTI is not allowed\r\n".getBytes());
           } else {
-            for (int i = 1; i < parts.length; i++) watchedKeys.add(parts[i]);
+            for (int i = 1; i < parts.length; i++) {
+              watchedKeys.add(parts[i]);
+              keyDirtyFlags.computeIfAbsent(parts[i],
+                  k -> Collections.synchronizedSet(new HashSet<>())).add(watchDirty);
+            }
             out.write("+OK\r\n".getBytes());
           }
           // existing auth + execCommand block
@@ -486,6 +505,7 @@ public class Main {
 
       case "SET":
         store.put(parts[1], parts[2]);
+        markKeyDirty(parts[1]);
         if (parts.length >= 5 && parts[3].toUpperCase().equals("PX"))
           expiry.put(parts[1], System.currentTimeMillis() + Long.parseLong(parts[4]));
         else
@@ -947,6 +967,13 @@ public class Main {
     masterOffset.addAndGet(msg.length);
     for (ReplicaState rs : replicas) {
       try { rs.out.write(msg); rs.out.flush(); } catch (IOException e) { replicas.remove(rs); }
+    }
+  }
+
+  private static void markKeyDirty(String key) {
+    Set<AtomicBoolean> flags = keyDirtyFlags.get(key);
+    if (flags != null) synchronized (flags) {
+      for (AtomicBoolean f : flags) f.set(true);
     }
   }
 
