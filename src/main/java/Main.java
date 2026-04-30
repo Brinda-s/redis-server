@@ -155,7 +155,6 @@ public class Main {
       List<String[]> txQueue = new ArrayList<>();
       Set<String> subscribedChannels = new HashSet<>();
       boolean inSubscribed = false;
-      boolean inSubscribed = false;
       boolean authenticated = defaultUserNopass; // ADD THIS LINE
 
       String line;
@@ -236,8 +235,6 @@ public class Main {
             String lower = command.toLowerCase();
             out.write(("-ERR Can't execute '" + lower + "': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context\r\n").getBytes());
           }
-
-        } else {
         } else {
           if (defaultUserNopass) authenticated = true;
           boolean isAuthExempt = command.equals("AUTH")
