@@ -559,20 +559,23 @@ public class Main {
       case "ECHO":
         return "$" + parts[1].length() + "\r\n" + parts[1] + "\r\n";
 
-      case "SET":
-        store.put(parts[1], parts[2]);
-        markKeyDirty(parts[1]);
-        // AOF write
-        if (aofStream != null) {
-          try {
-            StringBuilder aof = new StringBuilder("*" + parts.length + "\r\n");
-            for (String p : parts) aof.append("$").append(p.length()).append("\r\n").append(p).append("\r\n");
-            aofStream.write(aof.toString().getBytes());
-            aofStream.flush();
-          } catch (IOException ignored) {}
-        }
-        propagate(parts);
-        return "+OK\r\n";
+        case "SET":
+          store.put(parts[1], parts[2]);
+          if (parts.length >= 5 && parts[3].toUpperCase().equals("PX"))
+            expiry.put(parts[1], System.currentTimeMillis() + Long.parseLong(parts[4]));
+          else
+            expiry.remove(parts[1]);
+          markKeyDirty(parts[1]);
+          if (aofStream != null) {
+            try {
+              StringBuilder aof = new StringBuilder("*" + parts.length + "\r\n");
+              for (String p : parts) aof.append("$").append(p.length()).append("\r\n").append(p).append("\r\n");
+              aofStream.write(aof.toString().getBytes());
+              aofStream.flush();
+            } catch (IOException ignored) {}
+          }
+          propagate(parts);
+          return "+OK\r\n";
 
       case "GET": {
         String k = parts[1];
