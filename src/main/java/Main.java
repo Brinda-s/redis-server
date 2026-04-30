@@ -71,6 +71,10 @@ public class Main {
     if (!dir.isEmpty() && !dbfilename.isEmpty()) {
       loadRdb(dir + "/" + dbfilename);
     }
+  
+    if (appendonly.equals("yes")) {
+      new java.io.File(dir + "/" + appenddirname).mkdirs();
+    }
 
     try {
       ServerSocket serverSocket = new ServerSocket(port);
