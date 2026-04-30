@@ -82,15 +82,19 @@ public class Main {
           "file " + appendfilename + ".1.incr.aof seq 1 type i\n"
         );
       } catch (IOException ignored) {}
-      if (appendonly.equals("yes")) {
-        new java.io.File(dir + "/" + appenddirname).mkdirs();
-        try {
-          new java.io.File(dir + "/" + appenddirname + "/" + appendfilename + ".1.incr.aof").createNewFile();
-          java.nio.file.Files.writeString(
-            java.nio.file.Path.of(dir + "/" + appenddirname + "/" + appendfilename + ".manifest"),
-            "file " + appendfilename + ".1.incr.aof seq 1 type i\n"
-          );
-        } catch (IOException ignored) {}
+      try {
+        java.io.File manifestFile = new java.io.File(dir + "/" + appenddirname + "/" + appendfilename + ".manifest");
+        for (String mLine : java.nio.file.Files.readAllLines(manifestFile.toPath())) {
+          if (mLine.contains("type i")) {
+            String[] tokens = mLine.trim().split("\\s+");
+            String aofFileName = tokens[1];
+            replayAof(dir + "/" + appenddirname + "/" + aofFileName);  // ADD THIS
+            aofStream = new java.io.FileOutputStream(dir + "/" + appenddirname + "/" + aofFileName, true);
+            break;
+          }
+        }
+      } catch (IOException ignored) {}
+    }
   
        
         try {
@@ -1074,6 +1078,25 @@ public class Main {
     }
     if (c == -1 && sb.length() == 0) return null;
     return sb.toString();
+  }
+
+  private static void replayAof(String path) {   // ADD HERE
+    try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(path)))) {
+      String line;
+      while ((line = reader.readLine()) != null) {
+        if (!line.startsWith("*")) continue;
+        int numArgs = Integer.parseInt(line.substring(1));
+        String[] parts = new String[numArgs];
+        for (int i = 0; i < numArgs; i++) {
+          reader.readLine();
+          parts[i] = reader.readLine();
+        }
+        if (parts[0] == null) continue;
+        try { execCommand(parts[0].toUpperCase(), parts, null); } catch (Exception ignored) {}
+      }
+    } catch (Exception e) {
+      System.out.println("AOF replay error: " + e.getMessage());
+    }
   }
 
   // ── RDB Loader ───────────────────────────────────────────────────────────
