@@ -96,20 +96,7 @@ public class Main {
       } catch (IOException ignored) {}
     }
   
-       
-        try {
-          java.io.File manifestFile = new java.io.File(dir + "/" + appenddirname + "/" + appendfilename + ".manifest");
-          for (String mLine : java.nio.file.Files.readAllLines(manifestFile.toPath())) {
-            if (mLine.contains("type i")) {
-              String[] tokens = mLine.trim().split("\\s+");
-              String aofFileName = tokens[1];
-              aofStream = new java.io.FileOutputStream(dir + "/" + appenddirname + "/" + aofFileName, true);
-              break;
-            }
-          }
-        } catch (IOException ignored) {}
-      }  // ← closing brace of if block
-    }
+      
     try {
       ServerSocket serverSocket = new ServerSocket(port);
       serverSocket.setReuseAddress(true);
