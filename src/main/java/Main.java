@@ -18,7 +18,7 @@ public class Main {
   static ConcurrentHashMap<String, TreeMap<String, Double>> zsetStore = new ConcurrentHashMap<>();
   static ConcurrentHashMap<String, Set<AtomicBoolean>> keyDirtyFlags = new ConcurrentHashMap<>();
   static String role = "master";
-  static String dir = "";
+  static String dir = System.getProperty("user.dir");
   static String dbfilename = "";
 
   static class ReplicaState {
