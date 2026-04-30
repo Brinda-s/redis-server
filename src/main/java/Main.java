@@ -612,10 +612,6 @@ public class Main {
           switch (param) {
             case "dir":            value = dir; break;
             case "dbfilename":     value = dbfilename; break;
-            case "appendonly":     value = "no"; break;
-            case "appenddirname":  value = "appendonlydir"; break;
-            case "appendfilename": value = "appendonly.aof"; break;
-            case "appendfsync":    value = "everysec"; break;
             case "appendonly":     value = appendonly; break;
             case "appenddirname":  value = appenddirname; break;
             case "appendfilename": value = appendfilename; break;
