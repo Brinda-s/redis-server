@@ -873,6 +873,8 @@ public class Main {
         return "-WRONGPASS invalid username-password pair or user is disabled.\r\n";
       }
 
+      case "WATCH": return "+OK\r\n";
+
       default: return "-ERR unknown command\r\n";
     }  // end of switch
   }  // end of execCommand
