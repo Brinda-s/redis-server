@@ -262,6 +262,14 @@ public class Main {
             }
             out.write("+OK\r\n".getBytes());
           }
+        } else if (command.equals("UNWATCH")) {
+          for (String k : watchedKeys) {
+            Set<AtomicBoolean> flags = keyDirtyFlags.get(k);
+            if (flags != null) flags.remove(watchDirty);
+          }
+          watchedKeys.clear();
+          watchDirty.set(false);
+          out.write("+OK\r\n".getBytes());
           // existing auth + execCommand block
         } else {
           if (defaultUserNopass) authenticated = true;
