@@ -155,7 +155,8 @@ public class Main {
       List<String[]> txQueue = new ArrayList<>();
       Set<String> subscribedChannels = new HashSet<>();
       boolean inSubscribed = false;
-      boolean authenticated = defaultUserNopass; // ADD THIS LINE
+      boolean authenticated = defaultUserNopass; 
+      Set<String> watchedKeys = new HashSet<>();
 
       String line;
       while ((line = in.readLine()) != null) {
@@ -235,6 +236,14 @@ public class Main {
             String lower = command.toLowerCase();
             out.write(("-ERR Can't execute '" + lower + "': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context\r\n").getBytes());
           }
+        } else if (command.equals("WATCH")) {
+          if (inMulti) {
+            out.write("-ERR WATCH inside MULTI is not allowed\r\n".getBytes());
+          } else {
+            for (int i = 1; i < parts.length; i++) watchedKeys.add(parts[i]);
+            out.write("+OK\r\n".getBytes());
+          }
+          // existing auth + execCommand block
         } else {
           if (defaultUserNopass) authenticated = true;
           boolean isAuthExempt = command.equals("AUTH")
