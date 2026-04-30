@@ -24,6 +24,7 @@ public class Main {
   static String appenddirname = "appendonlydir";
   static String appendfilename = "appendonly.aof";
   static String appendfsync = "everysec";
+  static java.io.FileOutputStream aofStream = null;
 
   static class ReplicaState {
     OutputStream out;
@@ -81,6 +82,29 @@ public class Main {
           "file " + appendfilename + ".1.incr.aof seq 1 type i\n"
         );
       } catch (IOException ignored) {}
+      if (appendonly.equals("yes")) {
+        new java.io.File(dir + "/" + appenddirname).mkdirs();
+        try {
+          new java.io.File(dir + "/" + appenddirname + "/" + appendfilename + ".1.incr.aof").createNewFile();
+          java.nio.file.Files.writeString(
+            java.nio.file.Path.of(dir + "/" + appenddirname + "/" + appendfilename + ".manifest"),
+            "file " + appendfilename + ".1.incr.aof seq 1 type i\n"
+          );
+        } catch (IOException ignored) {}
+  
+       
+        try {
+          java.io.File manifestFile = new java.io.File(dir + "/" + appenddirname + "/" + appendfilename + ".manifest");
+          for (String mLine : java.nio.file.Files.readAllLines(manifestFile.toPath())) {
+            if (mLine.contains("type i")) {
+              String[] tokens = mLine.trim().split("\\s+");
+              String aofFileName = tokens[1];
+              aofStream = new java.io.FileOutputStream(dir + "/" + appenddirname + "/" + aofFileName, true);
+              break;
+            }
+          }
+        } catch (IOException ignored) {}
+      }  // ← closing brace of if block
     }
     try {
       ServerSocket serverSocket = new ServerSocket(port);
@@ -538,10 +562,15 @@ public class Main {
       case "SET":
         store.put(parts[1], parts[2]);
         markKeyDirty(parts[1]);
-        if (parts.length >= 5 && parts[3].toUpperCase().equals("PX"))
-          expiry.put(parts[1], System.currentTimeMillis() + Long.parseLong(parts[4]));
-        else
-          expiry.remove(parts[1]);
+        // AOF write
+        if (aofStream != null) {
+          try {
+            StringBuilder aof = new StringBuilder("*" + parts.length + "\r\n");
+            for (String p : parts) aof.append("$").append(p.length()).append("\r\n").append(p).append("\r\n");
+            aofStream.write(aof.toString().getBytes());
+            aofStream.flush();
+          } catch (IOException ignored) {}
+        }
         propagate(parts);
         return "+OK\r\n";
 
