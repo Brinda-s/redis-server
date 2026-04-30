@@ -75,20 +75,24 @@ public class Main {
   
     if (appendonly.equals("yes")) {
       new java.io.File(dir + "/" + appenddirname).mkdirs();
+      java.io.File manifestFile = new java.io.File(dir + "/" + appenddirname + "/" + appendfilename + ".manifest");
+      // Only create default files if manifest doesn't already exist
+      if (!manifestFile.exists()) {
+        try {
+          new java.io.File(dir + "/" + appenddirname + "/" + appendfilename + ".1.incr.aof").createNewFile();
+          java.nio.file.Files.writeString(
+            manifestFile.toPath(),
+            "file " + appendfilename + ".1.incr.aof seq 1 type i\n"
+          );
+        } catch (IOException ignored) {}
+      }
+      // Always read manifest to find active AOF file
       try {
-        new java.io.File(dir + "/" + appenddirname + "/" + appendfilename + ".1.incr.aof").createNewFile();
-        java.nio.file.Files.writeString(
-          java.nio.file.Path.of(dir + "/" + appenddirname + "/" + appendfilename + ".manifest"),
-          "file " + appendfilename + ".1.incr.aof seq 1 type i\n"
-        );
-      } catch (IOException ignored) {}
-      try {
-        java.io.File manifestFile = new java.io.File(dir + "/" + appenddirname + "/" + appendfilename + ".manifest");
         for (String mLine : java.nio.file.Files.readAllLines(manifestFile.toPath())) {
           if (mLine.contains("type i")) {
             String[] tokens = mLine.trim().split("\\s+");
             String aofFileName = tokens[1];
-            replayAof(dir + "/" + appenddirname + "/" + aofFileName);  // ADD THIS
+            replayAof(dir + "/" + appenddirname + "/" + aofFileName);
             aofStream = new java.io.FileOutputStream(dir + "/" + appenddirname + "/" + aofFileName, true);
             break;
           }
