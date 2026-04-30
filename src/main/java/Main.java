@@ -839,6 +839,24 @@ public class Main {
         return "-ERR unknown ACL command\r\n";
       }
 
+      case "AUTH": {
+        // AUTH <username> <password>
+        String username = parts.length >= 3 ? parts[1] : "default";
+        String password = parts.length >= 3 ? parts[2] : parts[1];
+        if (!username.equals("default"))
+          return "-WRONGPASS invalid username-password pair or user is disabled.\r\n";
+        if (defaultUserNopass) return "+OK\r\n";
+        try {
+          java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+          byte[] hash = md.digest(password.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+          StringBuilder hex = new StringBuilder();
+          for (byte b : hash) hex.append(String.format("%02x", b));
+          String hashStr = hex.toString();
+          if (defaultUserPasswords.contains(hashStr)) return "+OK\r\n";
+        } catch (Exception ignored) {}
+        return "-WRONGPASS invalid username-password pair or user is disabled.\r\n";
+      }
+
       default: return "-ERR unknown command\r\n";
     }  // end of switch
   }  // end of execCommand
