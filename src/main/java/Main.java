@@ -20,6 +20,10 @@ public class Main {
   static String role = "master";
   static String dir = System.getProperty("user.dir");
   static String dbfilename = "";
+  static String appendonly = "no";
+  static String appenddirname = "appendonlydir";
+  static String appendfilename = "appendonly.aof";
+  static String appendfsync = "everysec";
 
   static class ReplicaState {
     OutputStream out;
@@ -58,6 +62,10 @@ public class Main {
       if (args[i].equals("--replicaof"))  role       = "slave";
       if (args[i].equals("--dir"))        dir        = args[i + 1];
       if (args[i].equals("--dbfilename")) dbfilename = args[i + 1];
+      if (args[i].equals("--appendonly"))     appendonly     = args[i + 1];
+      if (args[i].equals("--appenddirname"))  appenddirname  = args[i + 1];
+      if (args[i].equals("--appendfilename")) appendfilename = args[i + 1];
+      if (args[i].equals("--appendfsync"))    appendfsync    = args[i + 1];
     }
 
     if (!dir.isEmpty() && !dbfilename.isEmpty()) {
@@ -608,6 +616,10 @@ public class Main {
             case "appenddirname":  value = "appendonlydir"; break;
             case "appendfilename": value = "appendonly.aof"; break;
             case "appendfsync":    value = "everysec"; break;
+            case "appendonly":     value = appendonly; break;
+            case "appenddirname":  value = appenddirname; break;
+            case "appendfilename": value = appendfilename; break;
+            case "appendfsync":    value = appendfsync; break;
             default:               value = ""; break;
           }
           return "*2\r\n$" + param.length() + "\r\n" + param + "\r\n$"
