@@ -74,6 +74,9 @@ public class Main {
   
     if (appendonly.equals("yes")) {
       new java.io.File(dir + "/" + appenddirname).mkdirs();
+      try {
+        new java.io.File(dir + "/" + appenddirname + "/" + appendfilename + ".1.incr.aof").createNewFile();
+      } catch (IOException ignored) {}
     }
 
     try {
