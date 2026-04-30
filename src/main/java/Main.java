@@ -218,10 +218,16 @@ public class Main {
           } else {
             inMulti = false;
             txQueue.clear();
+            // ADD THESE 4 LINES:
+            for (String k : watchedKeys) {
+              Set<AtomicBoolean> flags = keyDirtyFlags.get(k);
+              if (flags != null) flags.remove(watchDirty);
+            }
+            watchedKeys.clear();
+            watchDirty.set(false);
             out.write("+OK\r\n".getBytes());
           }
-
-        } else if (command.equals("SUBSCRIBE") || command.equals("UNSUBSCRIBE")) {
+          } else if (command.equals("SUBSCRIBE") || command.equals("UNSUBSCRIBE")) {
           StringBuilder sb = new StringBuilder();
           for (int i = 1; i < parts.length; i++) {
             String ch = parts[i];
