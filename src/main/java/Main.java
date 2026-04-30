@@ -838,11 +838,10 @@ public class Main {
         }
         return "-ERR unknown ACL command\r\n";
       }
-    }  // end of ACL case
 
-    default: return "-ERR unknown command\r\n";
-  }  // end of switch
-}  // end of execCommand
+      default: return "-ERR unknown command\r\n";
+    }  // end of switch
+  }  // end of execCommand
     
 
   // ── Helpers ──────────────────────────────────────────────────────────────
