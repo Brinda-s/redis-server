@@ -76,9 +76,12 @@ public class Main {
       new java.io.File(dir + "/" + appenddirname).mkdirs();
       try {
         new java.io.File(dir + "/" + appenddirname + "/" + appendfilename + ".1.incr.aof").createNewFile();
+        java.nio.file.Files.writeString(
+          java.nio.file.Path.of(dir + "/" + appenddirname + "/" + appendfilename + ".manifest"),
+          "file " + appendfilename + ".1.incr.aof seq 1 type i\n"
+        );
       } catch (IOException ignored) {}
     }
-
     try {
       ServerSocket serverSocket = new ServerSocket(port);
       serverSocket.setReuseAddress(true);
