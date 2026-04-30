@@ -175,7 +175,7 @@ public class Main {
         String command = (parts[0] != null) ? parts[0].toUpperCase() : "NULL";
 
         // Queue commands inside MULTI block
-        if (inMulti && !command.equals("EXEC") && !command.equals("DISCARD")) {
+        if (inMulti && !command.equals("EXEC") && !command.equals("DISCARD") && !command.equals("WATCH")) {
           txQueue.add(parts);
           out.write("+QUEUED\r\n".getBytes());
           out.flush();
